@@ -84,9 +84,15 @@ The workflow uploads `pstore-monitor-windows.zip` to GitHub Releases automatical
 ### Run on Windows
 
 1. Unzip the artifact.
-2. Double-click `pstore-monitor.exe` (or run from a terminal).
+2. Double-click **`run.bat`** (recommended) or `pstore-monitor.exe`.
 3. Browser opens to http://127.0.0.1:9090.
 4. Enter PowerStore credentials under **Settings**.
+
+If it fails instantly, open **`run.bat`** instead of the exe — it keeps the window open. Errors are also logged to:
+
+```
+%LOCALAPPDATA%\pstore-monitor\startup.log
+```
 
 Data is stored in `%LOCALAPPDATA%\pstore-monitor\`. Credentials go to Windows Credential Manager.
 

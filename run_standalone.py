@@ -9,10 +9,56 @@ import threading
 import time
 import traceback
 import webbrowser
+from datetime import datetime, timezone
+from pathlib import Path
+
+
+def _log_file() -> Path:
+    if sys.platform == "win32":
+        base = os.environ.get("LOCALAPPDATA")
+        if base:
+            return Path(base) / "pstore-monitor" / "startup.log"
+        return Path.home() / "AppData" / "Local" / "pstore-monitor" / "startup.log"
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / "pstore-monitor" / "startup.log"
+    return Path.home() / ".local" / "share" / "pstore-monitor" / "startup.log"
 
 
 def _log(message: str) -> None:
-    print(message, flush=True)
+    line = message
+    print(line, flush=True)
+    try:
+        path = _log_file()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(f"[{stamp}] {line}\n")
+    except OSError:
+        pass
+
+
+def _ensure_runtime_layout() -> None:
+    if not getattr(sys, "frozen", False):
+        return
+
+    exe_dir = Path(sys.executable).resolve().parent
+    os.chdir(exe_dir)
+
+    internal_dir = exe_dir / "_internal"
+    if not internal_dir.is_dir():
+        raise RuntimeError(
+            "Missing _internal folder next to pstore-monitor.exe. "
+            "Copy the entire unzipped pstore-monitor folder, not just the exe."
+        )
+
+
+def _pause_on_error() -> None:
+    if sys.platform != "win32":
+        return
+    _log("")
+    _log(f"Log file: {_log_file()}")
+    _log("Press any key to close...")
+    os.system("pause")
 
 
 def parse_args() -> argparse.Namespace:
@@ -24,6 +70,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
+    _ensure_runtime_layout()
     _log("Starting PowerStore Monitor...")
     _log("Loading components (this can take 30-60 seconds on slower PCs)...")
 
@@ -67,11 +114,5 @@ if __name__ == "__main__":
         _log("")
         _log("PowerStore Monitor failed to start:")
         traceback.print_exc()
-        if sys.platform == "win32":
-            _log("")
-            _log("Press Enter to close...")
-            try:
-                input()
-            except EOFError:
-                pass
+        _pause_on_error()
         sys.exit(1)

@@ -32,6 +32,10 @@ jobs:
       - name: Build standalone app
         run: pyinstaller pstore-monitor.spec --noconfirm
 
+      - name: Add launcher script
+        shell: pwsh
+        run: Copy-Item run.bat dist/pstore-monitor/run.bat
+
       - name: Create zip
         shell: pwsh
         run: |
