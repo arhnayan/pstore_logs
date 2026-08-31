@@ -90,7 +90,20 @@ The workflow uploads `pstore-monitor-windows.zip` to GitHub Releases automatical
 
 Data is stored in `%LOCALAPPDATA%\pstore-monitor\`. Credentials go to Windows Credential Manager.
 
-To change the cluster IP before building, edit `cluster_ip` in `app/config.py` and re-run the workflow.
+**Change port** (if 8080 is in use):
+
+```powershell
+.\pstore-monitor.exe --port 9090
+```
+
+Or set an environment variable before starting:
+
+```powershell
+set PSTORE_PORT=9090
+.\pstore-monitor.exe
+```
+
+To change the cluster IP, set `PSTORE_CLUSTER_IP` the same way, or edit `app/config.py` before rebuilding.
 
 ### Local Windows build (optional)
 

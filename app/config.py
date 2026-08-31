@@ -2,17 +2,28 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
 from app.paths import user_data_dir, user_downloads_dir
 
 
+def _env_int(name: str, default: int) -> int:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        return default
+
+
 @dataclass(frozen=True)
 class Settings:
-    cluster_ip: str = "192.168.1.40"
-    host: str = "127.0.0.1"
-    port: int = 8080
+    cluster_ip: str = os.environ.get("PSTORE_CLUSTER_IP", "192.168.1.40")
+    host: str = os.environ.get("PSTORE_HOST", "127.0.0.1")
+    port: int = _env_int("PSTORE_PORT", 8080)
 
     poll_alerts_sec: int = 5
     poll_events_sec: int = 15
