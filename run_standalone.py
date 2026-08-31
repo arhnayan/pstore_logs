@@ -84,6 +84,7 @@ def main() -> None:
     import uvicorn
 
     from app.config import settings
+    from app.main import app
 
     host = settings.host
     port = settings.port
@@ -100,7 +101,7 @@ def main() -> None:
     _log("Press Ctrl+C to stop.")
 
     uvicorn.run(
-        "app.main:app",
+        app,
         host=host,
         port=port,
         log_level="info",

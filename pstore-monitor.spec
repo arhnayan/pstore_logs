@@ -5,8 +5,10 @@ from PyInstaller.utils.hooks import collect_submodules
 block_cipher = None
 
 hiddenimports = (
-    collect_submodules("uvicorn")
+    collect_submodules("app")
+    + collect_submodules("uvicorn")
     + collect_submodules("starlette")
+    + collect_submodules("fastapi")
     + collect_submodules("httpx")
     + [
         "aiosqlite",
