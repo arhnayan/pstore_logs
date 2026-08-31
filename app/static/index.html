@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PowerStore Monitor</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+</head>
+<body>
+  <nav class="sidebar">
+    <div class="logo">
+      <h1>PowerStore Monitor</h1>
+      <p id="cluster-label">192.168.1.40</p>
+    </div>
+    <a href="#overview" class="nav-link active" data-page="overview">Overview</a>
+    <a href="#resources" class="nav-link" data-page="resources">Resources</a>
+    <a href="#metrics" class="nav-link" data-page="metrics">I/O Metrics</a>
+    <a href="#capacity" class="nav-link" data-page="capacity">Capacity</a>
+    <a href="#storage" class="nav-link" data-page="storage">Storage</a>
+    <a href="#nas" class="nav-link" data-page="nas">NAS</a>
+    <a href="#alerts" class="nav-link" data-page="alerts">Alerts</a>
+    <a href="#events" class="nav-link" data-page="events">Events</a>
+    <a href="#hardware" class="nav-link" data-page="hardware">Hardware</a>
+    <a href="#ports" class="nav-link" data-page="ports">Ports</a>
+    <a href="#protection" class="nav-link" data-page="protection">Protection</a>
+    <a href="#audit" class="nav-link" data-page="audit">Audit</a>
+    <a href="#support" class="nav-link" data-page="support">Support</a>
+    <a href="#settings" class="nav-link" data-page="settings">Settings</a>
+  </nav>
+
+  <main class="main">
+    <div class="status-bar" style="margin-bottom:1rem;">
+      <span><span id="conn-dot" class="status-dot pending"></span><span id="conn-text">Connecting...</span></span>
+      <span id="last-poll"></span>
+    </div>
+
+    <section id="page-overview" class="page active">
+      <div class="page-header"><h2>Overview</h2></div>
+      <div class="panel" id="cluster-info-panel">
+        <div class="panel-header"><h3>Cluster & Appliances</h3></div>
+        <div id="cluster-info"></div>
+      </div>
+      <div class="cards" id="overview-cards"></div>
+      <div class="cards" id="overview-live"></div>
+      <div class="grid-2">
+        <div class="panel">
+          <div class="panel-header"><h3>Cluster IOPS (live)</h3></div>
+          <div class="chart-wrap chart-sm"><canvas id="overview-iops-spark"></canvas></div>
+        </div>
+        <div class="panel">
+          <div class="panel-header"><h3>Cluster Latency (live)</h3></div>
+          <div class="chart-wrap chart-sm"><canvas id="overview-lat-spark"></canvas></div>
+        </div>
+      </div>
+      <div class="panel">
+        <div class="panel-header"><h3>Recent Critical / Major Alerts</h3></div>
+        <div id="overview-recent"></div>
+      </div>
+    </section>
+
+    <section id="page-resources" class="page">
+      <div class="page-header">
+        <div>
+          <h2>System Resources</h2>
+          <p class="page-subtitle">CPU, capacity, hardware health &amp; replication — PowerStore REST API</p>
+        </div>
+      </div>
+      <div class="cards" id="resources-summary"></div>
+      <div class="panel">
+        <div class="panel-header"><h3>Efficiency &amp; Savings</h3></div>
+        <div class="efficiency-grid" id="resources-efficiency"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-header"><h3>Appliances</h3></div>
+        <div class="appliance-grid" id="resources-appliances"></div>
+      </div>
+      <div class="grid-2">
+        <div class="panel">
+          <div class="panel-header"><h3>Hardware Health</h3></div>
+          <div id="resources-health"></div>
+        </div>
+        <div class="panel">
+          <div class="panel-header"><h3>Replication / Copy</h3></div>
+          <div id="resources-copy"></div>
+        </div>
+      </div>
+      <div class="panel">
+        <div class="panel-header"><h3>Nodes</h3></div>
+        <div id="resources-nodes"></div>
+      </div>
+      <div class="grid-2">
+        <div class="panel">
+          <div class="panel-header"><h3>Drive Endurance</h3></div>
+          <div class="chart-wrap chart-sm"><canvas id="resources-wear-chart"></canvas></div>
+          <div id="resources-drives-table"></div>
+        </div>
+        <div class="panel">
+          <div class="panel-header"><h3>Ethernet Ports</h3></div>
+          <div id="resources-eth-table"></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="page-metrics" class="page">
+      <div class="page-header"><h2>I/O Metrics</h2></div>
+      <div class="grid-2">
+        <div class="panel">
+          <div class="panel-header"><h3>Cluster IOPS</h3></div>
+          <div class="chart-wrap"><canvas id="cluster-iops-chart"></canvas></div>
+        </div>
+        <div class="panel">
+          <div class="panel-header"><h3>Cluster Bandwidth (MB/s)</h3></div>
+          <div class="chart-wrap"><canvas id="cluster-bw-chart"></canvas></div>
+        </div>
+        <div class="panel">
+          <div class="panel-header"><h3>Cluster Latency (µs)</h3></div>
+          <div class="chart-wrap"><canvas id="cluster-lat-chart"></canvas></div>
+        </div>
+        <div class="panel">
+          <div class="panel-header"><h3>Per-Node IOPS</h3></div>
+          <div class="chart-wrap"><canvas id="node-iops-chart"></canvas></div>
+        </div>
+        <div class="panel">
+          <div class="panel-header"><h3>I/O Workload CPU (%)</h3></div>
+          <div class="chart-wrap"><canvas id="cluster-cpu-chart"></canvas></div>
+        </div>
+        <div class="panel">
+          <div class="panel-header"><h3>Per-Node I/O CPU</h3></div>
+          <div class="chart-wrap"><canvas id="node-cpu-chart"></canvas></div>
+        </div>
+      </div>
+      <div class="grid-2">
+        <div class="panel">
+          <div class="panel-header"><h3>Top Volumes by IOPS</h3></div>
+          <div id="top-volumes-table"></div>
+        </div>
+        <div class="panel">
+          <div class="panel-header"><h3>Top Hosts by IOPS</h3></div>
+          <div id="top-hosts-table"></div>
+        </div>
+      </div>
+      <div class="panel">
+        <div class="panel-header"><h3>Drive Wear (% remaining)</h3></div>
+        <div class="chart-wrap"><canvas id="wear-chart"></canvas></div>
+      </div>
+      <div class="panel" id="pinned-volume-panel" style="display:none;">
+        <div class="panel-header"><h3 id="pinned-volume-title">Pinned Volume</h3></div>
+        <div class="chart-wrap"><canvas id="pinned-volume-chart"></canvas></div>
+      </div>
+    </section>
+
+    <section id="page-capacity" class="page">
+      <div class="page-header"><h2>Capacity</h2></div>
+      <div class="cards" id="capacity-cards"></div>
+      <div class="grid-2">
+        <div class="panel">
+          <div class="panel-header"><h3>Physical Space</h3></div>
+          <div class="chart-wrap chart-sm"><canvas id="physical-gauge"></canvas></div>
+        </div>
+        <div class="panel">
+          <div class="panel-header"><h3>Logical Used vs Provisioned</h3></div>
+          <div class="chart-wrap chart-sm"><canvas id="logical-chart"></canvas></div>
+        </div>
+      </div>
+      <div class="panel">
+        <div class="panel-header"><h3>Usage Breakdown</h3></div>
+        <div id="capacity-breakdown"></div>
+      </div>
+    </section>
+
+    <section id="page-storage" class="page">
+      <div class="page-header"><h2>Storage Inventory</h2></div>
+      <div class="cards" id="storage-cards"></div>
+      <div class="panel">
+        <div class="panel-header"><h3>Primary Volumes</h3></div>
+        <div id="volumes-table"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-header"><h3>Hosts</h3></div>
+        <div id="hosts-table"></div>
+      </div>
+    </section>
+
+    <section id="page-nas" class="page">
+      <div class="page-header"><h2>NAS</h2></div>
+      <div class="panel">
+        <div class="panel-header"><h3>NAS Servers</h3></div>
+        <div id="nas-servers-table"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-header"><h3>File Systems</h3></div>
+        <div id="file-systems-table"></div>
+      </div>
+    </section>
+
+    <section id="page-alerts" class="page">
+      <div class="page-header">
+        <h2>Alerts</h2>
+        <div class="filters">
+          <select id="alert-severity-filter"><option value="">All severities</option><option>Critical</option><option>Major</option><option>Minor</option><option>Info</option></select>
+          <select id="alert-state-filter"><option value="">All states</option><option>ACTIVE</option><option>CLEARED</option></select>
+        </div>
+      </div>
+      <div class="panel"><div id="alerts-table"></div></div>
+    </section>
+
+    <section id="page-events" class="page">
+      <div class="page-header">
+        <h2>Events</h2>
+        <div class="filters">
+          <select id="event-severity-filter"><option value="">All severities</option><option>Critical</option><option>Major</option><option>Minor</option><option>Info</option></select>
+        </div>
+      </div>
+      <div class="panel"><div id="events-table"></div></div>
+    </section>
+
+    <section id="page-hardware" class="page">
+      <div class="page-header">
+        <h2>Hardware</h2>
+        <div class="filters">
+          <select id="hardware-type-filter"><option value="">All types</option></select>
+          <label><input type="checkbox" id="hardware-unhealthy-only"> Unhealthy only</label>
+        </div>
+      </div>
+      <div class="panel" id="node-specs-panel" style="display:none;">
+        <div class="panel-header"><h3>Node Specifications</h3></div>
+        <div id="node-specs"></div>
+      </div>
+      <div class="panel"><div id="hardware-table"></div></div>
+    </section>
+
+    <section id="page-ports" class="page">
+      <div class="page-header">
+        <h2>Ports</h2>
+        <div class="filters">
+          <select id="port-type-filter"><option value="">All ports</option><option value="fc">FC</option><option value="eth">Ethernet</option></select>
+        </div>
+      </div>
+      <div class="panel">
+        <div class="panel-header"><h3>Port I/O Performance</h3></div>
+        <div id="port-perf-table"></div>
+      </div>
+      <div class="panel"><div id="ports-table"></div></div>
+    </section>
+
+    <section id="page-protection" class="page">
+      <div class="page-header"><h2>Protection & Replication</h2></div>
+      <div class="cards" id="protection-cards"></div>
+      <div class="panel">
+        <div class="panel-header"><h3>Replication Sessions</h3></div>
+        <div id="replication-table"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-header"><h3>Remote Systems</h3></div>
+        <div id="remote-systems-table"></div>
+      </div>
+      <div class="grid-2">
+        <div class="panel">
+          <div class="panel-header"><h3>Protection Policies</h3></div>
+          <div id="policies-table"></div>
+        </div>
+        <div class="panel">
+          <div class="panel-header"><h3>Snapshot Rules</h3></div>
+          <div id="snapshot-rules-table"></div>
+        </div>
+      </div>
+      <div class="panel">
+        <div class="panel-header"><h3>Copy / Replication Metrics</h3></div>
+        <div id="copy-metrics"></div>
+      </div>
+    </section>
+
+    <section id="page-audit" class="page">
+      <div class="page-header"><h2>Audit Trail</h2></div>
+      <div id="audit-access-banner"></div>
+      <div class="panel"><div id="audit-table"></div></div>
+    </section>
+
+    <section id="page-support" class="page">
+      <div class="page-header"><h2>Log Bundle Collection</h2></div>
+      <div class="panel">
+        <div class="panel-header">
+          <h3>Data Collections</h3>
+          <button id="trigger-collection">Collect Logs</button>
+        </div>
+        <div id="collection-status-banner"></div>
+        <div id="collections-table"></div>
+      </div>
+    </section>
+
+    <section id="page-settings" class="page">
+      <div class="page-header"><h2>Settings</h2></div>
+      <div class="panel">
+        <form class="settings-form" id="settings-form">
+          <label>Cluster IP<input type="text" id="settings-cluster" readonly></label>
+          <label>Username<input type="text" id="settings-username" autocomplete="username"></label>
+          <label>Password<input type="password" id="settings-password" autocomplete="current-password"></label>
+          <div style="display:flex;gap:0.5rem;">
+            <button type="submit">Save Credentials</button>
+            <button type="button" class="secondary" id="clear-credentials">Clear</button>
+          </div>
+        </form>
+      </div>
+    </section>
+  </main>
+
+  <div id="toast" class="toast"></div>
+  <script src="/static/js/app.js"></script>
+</body>
+</html>
