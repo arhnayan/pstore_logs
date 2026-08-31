@@ -21,11 +21,11 @@ pip install -r requirements.txt
 
 ```bash
 source .venv/bin/activate
-uvicorn app.main:app --host 127.0.0.1 --port 8080
-uvicorn app.main:app --host 0.0.0.0 --port 8080
+uvicorn app.main:app --host 127.0.0.1 --port 9090
+uvicorn app.main:app --host 0.0.0.0 --port 9090
 ```
 
-Open http://127.0.0.1:8080 in your browser.
+Open http://127.0.0.1:9090 in your browser.
 
 On first launch, go to **Settings** and save your PowerStore admin credentials. They are stored in the macOS Keychain, not in the repo.
 
@@ -85,12 +85,12 @@ The workflow uploads `pstore-monitor-windows.zip` to GitHub Releases automatical
 
 1. Unzip the artifact.
 2. Double-click `pstore-monitor.exe` (or run from a terminal).
-3. Browser opens to http://127.0.0.1:8080.
+3. Browser opens to http://127.0.0.1:9090.
 4. Enter PowerStore credentials under **Settings**.
 
 Data is stored in `%LOCALAPPDATA%\pstore-monitor\`. Credentials go to Windows Credential Manager.
 
-**Change port** (if 8080 is in use):
+**Change port** (if 9090 is in use):
 
 ```powershell
 .\pstore-monitor.exe --port 9090
