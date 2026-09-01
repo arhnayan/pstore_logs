@@ -22,6 +22,7 @@ from app.routers import (
     nas,
     overview,
     protection,
+    reports,
     resources,
     settings,
     storage,
@@ -68,6 +69,7 @@ app.include_router(audit.router)
 app.include_router(datacollection.router)
 app.include_router(stream.router)
 app.include_router(settings.router)
+app.include_router(reports.router)
 
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 

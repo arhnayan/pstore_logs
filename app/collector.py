@@ -84,7 +84,7 @@ class Collector:
         await self._client.close()
 
     async def _ensure_logged_in(self) -> bool:
-        creds = get_credentials()
+        creds = await get_credentials()
         if not creds:
             await self.db.set_status("connection", "no_credentials")
             await self.bus.publish("status", {"connection": "no_credentials"})

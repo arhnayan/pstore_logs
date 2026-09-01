@@ -26,6 +26,7 @@
     <a href="#protection" class="nav-link" data-page="protection">Protection</a>
     <a href="#audit" class="nav-link" data-page="audit">Audit</a>
     <a href="#support" class="nav-link" data-page="support">Support</a>
+    <a href="#reports" class="nav-link" data-page="reports">Reports</a>
     <a href="#settings" class="nav-link" data-page="settings">Settings</a>
   </nav>
 
@@ -286,6 +287,24 @@
         </div>
         <div id="collection-status-banner"></div>
         <div id="collections-table"></div>
+      </div>
+    </section>
+
+    <section id="page-reports" class="page">
+      <div class="page-header"><h2>Storage Reports</h2></div>
+      <div class="panel">
+        <div class="panel-header">
+          <h3>All Locations Storage Report</h3>
+          <div style="display:flex;gap:0.5rem;">
+            <button type="button" id="save-locations">Save Locations</button>
+            <button type="button" id="generate-report">Generate Report</button>
+          </div>
+        </div>
+        <p id="reports-creds-warning" class="empty" style="display:none;">Save PowerStore credentials in Settings before generating.</p>
+        <p id="report-progress"></p>
+        <p id="report-error" style="color:var(--danger,#c0392b);"></p>
+        <p id="report-download"></p>
+        <div id="report-locations-table"></div>
       </div>
     </section>
 

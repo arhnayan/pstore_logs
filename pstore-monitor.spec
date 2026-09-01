@@ -10,9 +10,11 @@ hiddenimports = (
     + collect_submodules("starlette")
     + collect_submodules("fastapi")
     + collect_submodules("httpx")
+    + collect_submodules("pandas")
+    + collect_submodules("openpyxl")
     + [
         "aiosqlite",
-        "keyring.backends.Windows.WinVaultKeyring",
+        "numpy",
         "pydantic.deprecated.decorator",
     ]
 )

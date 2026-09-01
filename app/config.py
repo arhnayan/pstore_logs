@@ -48,8 +48,7 @@ class Settings:
     space_volume_cap: int = 50
     metrics_retention_hours: int = 24
     chart_max_points: int = 180
-
-    keyring_service: str = "pstore-monitor"
+    report_fetch_concurrency: int = 3
 
     @property
     def base_url(self) -> str:
@@ -71,6 +70,12 @@ class Settings:
     @property
     def downloads_dir(self) -> Path:
         path = user_downloads_dir()
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    @property
+    def reports_dir(self) -> Path:
+        path = self.data_dir / "reports"
         path.mkdir(parents=True, exist_ok=True)
         return path
 

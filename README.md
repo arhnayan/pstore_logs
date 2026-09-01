@@ -5,8 +5,8 @@ Local web app for collecting and monitoring Dell PowerStore cluster alerts, even
 ## Requirements
 
 - Python 3.11+
-- Mac (credentials stored in Keychain)
-- Network access to the PowerStore cluster management IP (`192.168.1.40`)
+- Mac or Windows
+- Network access to PowerStore cluster management IPs
 
 ## Setup
 
@@ -27,7 +27,7 @@ uvicorn app.main:app --host 0.0.0.0 --port 9090
 
 Open http://127.0.0.1:9090 in your browser.
 
-On first launch, go to **Settings** and save your PowerStore admin credentials. They are stored in the macOS Keychain, not in the repo.
+On first launch, go to **Settings** and save your PowerStore admin credentials. They are stored locally in the app SQLite database under your user data directory, not in the repo.
 
 ## CLI (legacy script)
 
@@ -52,6 +52,11 @@ python3 pstore_checks.py --type hardware --json
 - **Log bundles** — trigger, poll, download to `~/Downloads`
 - **macOS notifications** for new Critical alerts (deduplicated)
 - **Pin volume** — enable fast 5s metrics for a single volume via the UI
+- **Reports** — generate `All_Locations_Storage_Report.xlsx` across all Vodafone PowerStore sites
+
+## Reports
+
+Go to **Reports** in the sidebar. Six Vodafone locations are pre-seeded with **per-server MGMT IPs** from `VODAFONE NETWORK IP.xlsx`. Save credentials in **Settings**, then click **Generate Report**. The app connects to each server's MGMT IP, pulls hourly host metrics, and writes a styled combined Excel workbook to your app data `reports/` folder.
 
 ## Data storage
 

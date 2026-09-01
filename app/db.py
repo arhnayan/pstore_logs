@@ -120,6 +120,24 @@ CREATE TABLE IF NOT EXISTS collector_status (
     value TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS app_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS report_locations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE,
+    cluster_ip TEXT NOT NULL DEFAULT '',
+    servers_json TEXT NOT NULL,
+    server_ips_json TEXT NOT NULL DEFAULT '{}',
+    enabled INTEGER NOT NULL DEFAULT 1,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    last_status TEXT,
+    last_error TEXT,
+    last_fetched_at TEXT
+);
+
 CREATE TABLE IF NOT EXISTS volumes (
     id TEXT PRIMARY KEY,
     name TEXT,
@@ -298,6 +316,13 @@ class Database:
         if not self._schema_ready:
             await conn.executescript(SCHEMA)
             await conn.commit()
+            try:
+                await conn.execute(
+                    "ALTER TABLE report_locations ADD COLUMN server_ips_json TEXT NOT NULL DEFAULT '{}'"
+                )
+                await conn.commit()
+            except Exception:
+                pass
             self._schema_ready = True
 
     async def _connect(self) -> aiosqlite.Connection:
@@ -848,6 +873,101 @@ class Database:
             item["payload"] = json.loads(item.pop("payload_json"))
             result.append(item)
         return result
+
+    async def get_setting(self, key: str) -> str | None:
+        async with self.session() as conn:
+            cursor = await conn.execute(
+                "SELECT value FROM app_settings WHERE key=?",
+                (key,),
+            )
+            row = await cursor.fetchone()
+            return row["value"] if row else None
+
+    async def set_setting(self, key: str, value: str) -> None:
+        async with self.session() as conn:
+            await conn.execute(
+                "INSERT INTO app_settings(key, value) VALUES(?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (key, value),
+            )
+            await conn.commit()
+
+    async def delete_setting(self, key: str) -> None:
+        async with self.session() as conn:
+            await conn.execute("DELETE FROM app_settings WHERE key=?", (key,))
+            await conn.commit()
+
+    async def list_report_locations(self) -> list[dict[str, Any]]:
+        async with self.session() as conn:
+            cursor = await conn.execute(
+                "SELECT * FROM report_locations ORDER BY sort_order, name"
+            )
+            rows = await cursor.fetchall()
+        result = []
+        for row in rows:
+            item = dict(row)
+            item["servers"] = json.loads(item.pop("servers_json"))
+            raw_ips = item.pop("server_ips_json", "{}")
+            item["server_ips"] = json.loads(raw_ips) if raw_ips else {}
+            if not item["server_ips"] and item.get("cluster_ip"):
+                item["server_ips"] = {server: item["cluster_ip"] for server in item["servers"]}
+            item["enabled"] = bool(item["enabled"])
+            result.append(item)
+        return result
+
+    async def upsert_report_locations(self, locations: list[dict[str, Any]]) -> None:
+        async with self.session() as conn:
+            for idx, loc in enumerate(locations):
+                server_ips = loc.get("server_ips") or {}
+                await conn.execute(
+                    """
+                    INSERT INTO report_locations(
+                        name, cluster_ip, servers_json, server_ips_json, enabled, sort_order
+                    ) VALUES(?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(name) DO UPDATE SET
+                        cluster_ip=excluded.cluster_ip,
+                        servers_json=excluded.servers_json,
+                        server_ips_json=excluded.server_ips_json,
+                        enabled=excluded.enabled,
+                        sort_order=excluded.sort_order
+                    """,
+                    (
+                        loc["name"],
+                        loc.get("cluster_ip", ""),
+                        json.dumps(loc.get("servers", [])),
+                        json.dumps(server_ips),
+                        int(bool(loc.get("enabled", True))),
+                        loc.get("sort_order", idx),
+                    ),
+                )
+            await conn.commit()
+
+    async def update_report_location_status(
+        self,
+        name: str,
+        *,
+        status: str | None = None,
+        error: str | None = None,
+        fetched_at: str | None = None,
+    ) -> None:
+        async with self.session() as conn:
+            await conn.execute(
+                """
+                UPDATE report_locations
+                SET last_status=COALESCE(?, last_status),
+                    last_error=?,
+                    last_fetched_at=COALESCE(?, last_fetched_at)
+                WHERE name=?
+                """,
+                (status, error, fetched_at, name),
+            )
+            await conn.commit()
+
+    async def count_report_locations(self) -> int:
+        async with self.session() as conn:
+            cursor = await conn.execute("SELECT COUNT(*) AS c FROM report_locations")
+            row = await cursor.fetchone()
+            return int(row["c"]) if row else 0
 
     async def top_io_by_entity(
         self,

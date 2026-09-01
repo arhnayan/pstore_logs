@@ -19,10 +19,10 @@ class CredentialsPayload(BaseModel):
 
 @router.get("")
 async def get_settings() -> dict:
-    creds = get_credentials()
+    creds = await get_credentials()
     return {
         "cluster_ip": settings.cluster_ip,
-        "has_credentials": has_credentials(),
+        "has_credentials": await has_credentials(),
         "username": creds[0] if creds else None,
         "poll_intervals": {
             "alerts": settings.poll_alerts_sec,
@@ -57,11 +57,11 @@ async def save_credentials(payload: CredentialsPayload) -> dict:
     finally:
         await client.close()
 
-    set_credentials(payload.username, payload.password)
+    await set_credentials(payload.username, payload.password)
     return {"ok": True, "has_credentials": True}
 
 
 @router.delete("/credentials")
 async def delete_credentials() -> dict:
-    clear_credentials()
+    await clear_credentials()
     return {"ok": True, "has_credentials": False}

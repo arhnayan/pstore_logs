@@ -8,6 +8,7 @@ const state = {
   cluster: null, protection: null, portMetrics: null, resources: null,
   charts: {}, volumeNames: {}, hostNames: {}, portNames: {},
   pinnedVolumeId: null, collectionPollTimer: null,
+  reportLocations: [], reportStatus: null,
 };
 
 function $(sel) { return document.querySelector(sel); }
@@ -1055,6 +1056,113 @@ async function loadSettings() {
   $('#cluster-label').textContent = data.cluster_ip;
   $('#settings-cluster').value = data.cluster_ip;
   if (data.username) $('#settings-username').value = data.username;
+  renderReportsCredsWarning(!data.has_credentials);
+}
+
+async function loadReportLocations() {
+  const data = await api('/api/reports/locations');
+  state.reportLocations = data.locations || [];
+  renderReportLocations();
+}
+
+async function loadReportStatus() {
+  state.reportStatus = await api('/api/reports/status');
+  renderReportStatus();
+}
+
+function renderReportsCredsWarning(missing) {
+  const el = $('#reports-creds-warning');
+  if (el) el.style.display = missing ? 'block' : 'none';
+}
+
+function renderReportLocations() {
+  const el = $('#report-locations-table');
+  if (!el) return;
+  if (!state.reportLocations.length) {
+    el.innerHTML = '<div class="empty">No locations configured.</div>';
+    return;
+  }
+  const rows = [];
+  for (const loc of state.reportLocations) {
+    const servers = loc.servers || [];
+    const ips = loc.server_ips || {};
+    servers.forEach((server, idx) => {
+      rows.push({
+        name: idx === 0 ? loc.name : '',
+        server,
+        mgmt_ip: ips[server] || '',
+        last_status: idx === 0 ? (loc.last_status || '—') : '',
+        _locName: loc.name,
+      });
+    });
+  }
+  el.innerHTML = tableHtml([
+    { key: 'name', label: 'Location' },
+    { key: 'server', label: 'Server' },
+    { key: 'mgmt_ip', label: 'MGMT IP', render: row =>
+      `<input type="text" class="report-server-ip" data-location="${row._locName}" data-server="${row.server}" value="${row.mgmt_ip || ''}" style="width:100%;">` },
+    { key: 'last_status', label: 'Last Status' },
+  ], rows);
+}
+
+function renderReportStatus() {
+  const status = state.reportStatus;
+  if (!status) return;
+  const progress = $('#report-progress');
+  const error = $('#report-error');
+  const download = $('#report-download');
+  if (progress) progress.textContent = status.progress || '';
+  if (error) error.textContent = status.error || '';
+  if (download) {
+    if (status.filename && !status.running) {
+      download.innerHTML = `<a href="/api/reports/download/${status.filename}" download>Download ${status.filename}</a>`;
+    } else {
+      download.textContent = '';
+    }
+  }
+  const btn = $('#generate-report');
+  if (btn) btn.disabled = !!status.running;
+}
+
+async function saveReportLocations() {
+  const byName = Object.fromEntries(
+    state.reportLocations.map(loc => [loc.name, { ...loc, server_ips: { ...(loc.server_ips || {}) } }])
+  );
+  $$('.report-server-ip').forEach(input => {
+    const location = input.dataset.location;
+    const server = input.dataset.server;
+    if (byName[location]) byName[location].server_ips[server] = input.value.trim();
+  });
+  await api('/api/reports/locations', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ locations: Object.values(byName) }),
+  });
+  toast('Locations saved');
+  await loadReportLocations();
+}
+
+async function generateReport() {
+  const btn = $('#generate-report');
+  if (btn) btn.disabled = true;
+  try {
+    await saveReportLocations();
+    await api('/api/reports/generate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+    toast('Report generation started');
+    await loadReportStatus();
+  } catch (e) {
+    toast('Failed: ' + e.message);
+    if (btn) btn.disabled = false;
+  }
+}
+
+function setupReports() {
+  $('#save-locations')?.addEventListener('click', async () => {
+    try { await saveReportLocations(); } catch (e) { toast('Save failed: ' + e.message); }
+  });
+  $('#generate-report')?.addEventListener('click', async () => {
+    try { await generateReport(); } catch (e) { toast('Failed: ' + e.message); }
+  });
 }
 
 async function loadClusterSeries() {
@@ -1104,6 +1212,7 @@ function setupNav() {
       $$('.page').forEach(p => p.classList.remove('active'));
       $(`#page-${page}`).classList.add('active');
       if (page === 'support') loadCollections();
+      if (page === 'reports') { loadReportLocations(); loadReportStatus(); loadSettings(); }
       if (page === 'protection') loadProtection();
       if (page === 'resources') { loadResources().then(() => renderResources()); }
     });
@@ -1176,12 +1285,13 @@ function setupSSE() {
       else if (msg.type === 'port_perf') { loadPortMetrics(); loadPorts(); loadResources(); }
       else if (msg.type === 'object_space') { loadCapacity(); loadStorage(); loadResources(); }
       else if (msg.type === 'protection') { loadProtection(); loadResources(); }
+      else if (msg.type === 'report') { state.reportStatus = msg.data; renderReportStatus(); loadReportLocations(); }
     } catch { /* ignore */ }
   };
 }
 
 async function init() {
-  setupNav(); setupFilters(); setupSettings(); setupSupport(); setupSSE();
+  setupNav(); setupFilters(); setupSettings(); setupSupport(); setupReports(); setupSSE();
   ensureClusterCharts();
   await loadSettings();
   await refreshAll();

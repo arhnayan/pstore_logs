@@ -1,35 +1,34 @@
-"""Credential storage via macOS Keychain."""
+"""Credential storage in the local SQLite database."""
 
 from __future__ import annotations
 
-import keyring
+_USERNAME_KEY = "credentials_username"
+_PASSWORD_KEY = "credentials_password"
 
-from app.config import settings
 
+async def get_credentials() -> tuple[str, str] | None:
+    from app.deps import db
 
-def get_credentials() -> tuple[str, str] | None:
-    username = keyring.get_password(settings.keyring_service, "username")
-    password = keyring.get_password(settings.keyring_service, "password")
+    username = await db.get_setting(_USERNAME_KEY)
+    password = await db.get_setting(_PASSWORD_KEY)
     if username and password:
         return username, password
     return None
 
 
-def set_credentials(username: str, password: str) -> None:
-    keyring.set_password(settings.keyring_service, "username", username)
-    keyring.set_password(settings.keyring_service, "password", password)
+async def set_credentials(username: str, password: str) -> None:
+    from app.deps import db
+
+    await db.set_setting(_USERNAME_KEY, username)
+    await db.set_setting(_PASSWORD_KEY, password)
 
 
-def clear_credentials() -> None:
-    try:
-        keyring.delete_password(settings.keyring_service, "username")
-    except keyring.errors.PasswordDeleteError:
-        pass
-    try:
-        keyring.delete_password(settings.keyring_service, "password")
-    except keyring.errors.PasswordDeleteError:
-        pass
+async def clear_credentials() -> None:
+    from app.deps import db
+
+    await db.delete_setting(_USERNAME_KEY)
+    await db.delete_setting(_PASSWORD_KEY)
 
 
-def has_credentials() -> bool:
-    return get_credentials() is not None
+async def has_credentials() -> bool:
+    return (await get_credentials()) is not None
