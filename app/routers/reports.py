@@ -26,6 +26,7 @@ _job_state: dict = {
     "error": None,
     "output_file": None,
     "filename": None,
+    "servers_with_data": 0,
 }
 
 
@@ -93,6 +94,7 @@ async def generate_report(payload: GeneratePayload | None = None) -> dict:
         error=None,
         output_file=None,
         filename=None,
+        servers_with_data=0,
     )
     await event_bus.publish("report", dict(_job_state))
 
@@ -128,10 +130,11 @@ async def generate_report(payload: GeneratePayload | None = None) -> dict:
             )
             _set_job(
                 running=False,
-                progress="Report ready",
+                progress=f"Report ready ({result['servers_with_data']} servers with data)",
                 output_file=result["output_file"],
                 filename=result["filename"],
                 error=None,
+                servers_with_data=result["servers_with_data"],
             )
         except Exception as exc:
             logger.exception("Report generation failed")

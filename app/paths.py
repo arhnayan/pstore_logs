@@ -41,3 +41,31 @@ def user_downloads_dir() -> Path:
         if user_profile:
             return Path(user_profile) / "Downloads"
     return Path.home() / "Downloads"
+
+
+def report_csv_dir() -> Path | None:
+    """Optional bundled/historical CSV inputs for report fallback."""
+    candidates = [
+        app_dir().parent / "report_csv",
+        Path(__file__).resolve().parent.parent / "vodafone-rapor-2" / "raw_report_csv",
+        Path(__file__).resolve().parent.parent / "report_csv",
+    ]
+    if is_frozen():
+        candidates.insert(0, Path(sys._MEIPASS) / "report_csv")
+    for path in candidates:
+        if path.is_dir() and any(path.glob("*.csv")):
+            return path
+    return None
+
+
+def report_capacity_dir() -> Path | None:
+    candidates = [
+        app_dir().parent / "report_capacity_csv",
+        Path(__file__).resolve().parent.parent / "vodafone-rapor-2" / "formatted_report_csv",
+    ]
+    if is_frozen():
+        candidates.insert(0, Path(sys._MEIPASS) / "report_capacity_csv")
+    for path in candidates:
+        if path.is_dir() and any(path.glob("*.csv")):
+            return path
+    return None
