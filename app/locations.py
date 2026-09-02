@@ -10,7 +10,7 @@ from app.db import Database
 DEFAULT_LOCATIONS: list[dict[str, Any]] = [
     {
         "name": "Adana",
-        "cluster_ip": "",
+        "cluster_ip": "10.197.131.201",
         "servers": [
             "ADNTOCDELLCLD01", "ADNTOCDELLAPP01", "ADNTOCDELLAPP02",
             "ADNTOCDELLAPP03", "ADNTOCDELLAPP04", "ADNTOCDELLOSS01",
@@ -28,7 +28,7 @@ DEFAULT_LOCATIONS: list[dict[str, Any]] = [
     },
     {
         "name": "Diyarbakır",
-        "cluster_ip": "",
+        "cluster_ip": "10.197.202.70",
         "servers": ["DYBTOCDELLAPP01"],
         "server_ips": {
             "DYBTOCDELLAPP01": "10.197.202.70",
@@ -38,7 +38,7 @@ DEFAULT_LOCATIONS: list[dict[str, Any]] = [
     },
     {
         "name": "Esenyurt",
-        "cluster_ip": "",
+        "cluster_ip": "10.197.139.205",
         "servers": [
             "ESNTOCDELLCLD01", "ESNTOCDELLAPP01", "ESNTOCDELLAPP02",
             "ESNTOCDELLAPP03", "ESNTOCDELLAPP04", "ESNTOCDELLOSS01",
@@ -56,7 +56,7 @@ DEFAULT_LOCATIONS: list[dict[str, Any]] = [
     },
     {
         "name": "Gaziemir",
-        "cluster_ip": "",
+        "cluster_ip": "10.197.147.205",
         "servers": [
             "IZMTOCDELLCLD01", "IZMTOCDELLAPP01", "IZMTOCDELLAPP02",
             "IZMTOCDELLAPP03", "IZMTOCDELLAPP04", "IZMTOCDELLOSS01",
@@ -74,7 +74,7 @@ DEFAULT_LOCATIONS: list[dict[str, Any]] = [
     },
     {
         "name": "Pursaklar",
-        "cluster_ip": "",
+        "cluster_ip": "10.197.143.201",
         "servers": [
             "ANKTOCDELLCLD01", "ANKTOCDELLAPP01", "ANKTOCDELLAPP02",
             "ANKTOCDELLAPP03", "ANKTOCDELLAPP04", "ANKTOCDELLOSS01",
@@ -92,7 +92,7 @@ DEFAULT_LOCATIONS: list[dict[str, Any]] = [
     },
     {
         "name": "Tuzla",
-        "cluster_ip": "",
+        "cluster_ip": "10.197.135.205",
         "servers": [
             "TZLTOCDELLCLD01", "TZLTOCDELLAPP01", "TZLTOCDELLAPP02",
             "TZLTOCDELLAPP03", "TZLTOCDELLAPP04", "TZLTOCDELLOSS01",
@@ -137,6 +137,8 @@ async def ensure_locations(db: Database) -> list[dict[str, Any]]:
                 continue
             if not (current.get("server_ips") or {}):
                 updates.append({**default, **current, "servers": default["servers"], "server_ips": default["server_ips"]})
+            elif not (current.get("cluster_ip") or "").strip() and default.get("cluster_ip"):
+                updates.append({**current, "cluster_ip": default["cluster_ip"]})
         if updates:
             await db.upsert_report_locations(updates)
     return await db.list_report_locations()

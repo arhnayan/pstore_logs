@@ -11,6 +11,7 @@ from app.client import PowerStoreAuthError, PowerStoreClient
 from app.config import settings
 from app.credentials import get_credentials
 from app.db import Database, utc_now
+from app.monitor_target import get_active_cluster_ip, get_monitor_location_name
 from app.notify import notify_critical
 
 logger = logging.getLogger(__name__)
@@ -83,18 +84,53 @@ class Collector:
         self._tasks.clear()
         await self._client.close()
 
+    async def set_cluster_ip(self, cluster_ip: str) -> None:
+        cluster_ip = cluster_ip.strip()
+        if not cluster_ip:
+            return
+        self._client.cluster_ip = cluster_ip
+        self._client.base_url = f"https://{cluster_ip}/api/rest"
+        self._client._csrf_token = None
+        self._cluster_id = None
+        self._appliance_ids = []
+        self._node_ids = []
+        await self.db.set_status("cluster_ip", cluster_ip)
+        location_name = await get_monitor_location_name(self.db) or ""
+        await self.bus.publish("status", {
+            "cluster_ip": cluster_ip,
+            "monitor_location": location_name,
+            "connection": "pending",
+        })
+
+    async def _sync_cluster_target(self) -> str | None:
+        cluster_ip = await get_active_cluster_ip(self.db)
+        if cluster_ip:
+            await self.set_cluster_ip(cluster_ip)
+        return cluster_ip
+
     async def _ensure_logged_in(self) -> bool:
         creds = await get_credentials()
         if not creds:
             await self.db.set_status("connection", "no_credentials")
             await self.bus.publish("status", {"connection": "no_credentials"})
             return False
+        cluster_ip = await self._sync_cluster_target()
+        if not cluster_ip:
+            await self.db.set_status("connection", "error")
+            await self.db.set_status("last_error", "No monitoring location selected")
+            await self.bus.publish("status", {"connection": "error", "error": "No monitoring location selected"})
+            return False
         username, password = creds
         try:
             await self._client.login(username, password)
             await self.db.set_status("connection", "connected")
-            await self.db.set_status("cluster_ip", settings.cluster_ip)
-            await self.bus.publish("status", {"connection": "connected"})
+            await self.db.set_status("cluster_ip", cluster_ip)
+            location_name = await get_monitor_location_name(self.db) or ""
+            await self.bus.publish("status", {
+                "connection": "connected",
+                "cluster_ip": cluster_ip,
+                "monitor_location": location_name,
+            })
             return True
         except PowerStoreAuthError as exc:
             logger.warning("Auth failed: %s", exc)

@@ -9,6 +9,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.deps import collector, db
+from app.monitor_target import ensure_default_monitor_location, get_active_cluster_ip
 from app.paths import static_dir
 from app.routers import (
     alerts,
@@ -38,6 +39,10 @@ STATIC_DIR = static_dir()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await db.set_status("app_state", "starting")
+    await ensure_default_monitor_location(db)
+    cluster_ip = await get_active_cluster_ip(db)
+    if cluster_ip:
+        await collector.set_cluster_ip(cluster_ip)
     await collector.start()
     await db.set_status("app_state", "running")
     logger.info("PowerStore monitor started")

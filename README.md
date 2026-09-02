@@ -27,7 +27,7 @@ uvicorn app.main:app --host 0.0.0.0 --port 9090
 
 Open http://127.0.0.1:9090 in your browser.
 
-On first launch, go to **Settings** and save your PowerStore admin credentials. They are stored locally in the app SQLite database under your user data directory, not in the repo.
+On first launch, go to **Settings**, pick a **live monitoring location** (Vodafone site), and save your PowerStore admin credentials. They are stored locally in the app SQLite database under your user data directory, not in the repo.
 
 ## CLI (legacy script)
 
@@ -91,7 +91,9 @@ The workflow uploads `pstore-monitor-windows.zip` to GitHub Releases automatical
 1. Unzip the artifact.
 2. Double-click **`run.bat`** (recommended) or `pstore-monitor.exe`.
 3. Browser opens to http://127.0.0.1:9090.
-4. Enter PowerStore credentials under **Settings**.
+4. Pick a monitoring location and enter PowerStore credentials under **Settings**.
+
+Optional: override the selected location IP with `PSTORE_CLUSTER_IP` before starting the app.
 
 If it fails instantly, open **`run.bat`** instead of the exe — it keeps the window open. Errors are also logged to:
 
@@ -114,7 +116,7 @@ set PSTORE_PORT=9090
 .\pstore-monitor.exe
 ```
 
-To change the cluster IP, set `PSTORE_CLUSTER_IP` the same way, or edit `app/config.py` before rebuilding.
+Optional: override the monitoring location IP with `PSTORE_CLUSTER_IP` before starting the app.
 
 ### Local Windows build (optional)
 

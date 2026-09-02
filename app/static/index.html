@@ -11,7 +11,7 @@
   <nav class="sidebar">
     <div class="logo">
       <h1>PowerStore Monitor</h1>
-      <p id="cluster-label">192.168.1.40</p>
+      <p id="cluster-label">Select location in Settings</p>
     </div>
     <a href="#overview" class="nav-link active" data-page="overview">Overview</a>
     <a href="#resources" class="nav-link" data-page="resources">Resources</a>
@@ -312,7 +312,10 @@
       <div class="page-header"><h2>Settings</h2></div>
       <div class="panel">
         <form class="settings-form" id="settings-form">
-          <label>Cluster IP<input type="text" id="settings-cluster" readonly></label>
+          <label>Live monitoring location
+            <select id="settings-location"></select>
+          </label>
+          <p id="settings-cluster-ip" class="page-subtitle" style="margin:-0.25rem 0 0.75rem;">Cluster IP: —</p>
           <label>Username<input type="text" id="settings-username" autocomplete="username"></label>
           <label>Password<input type="password" id="settings-password" autocomplete="current-password"></label>
           <div style="display:flex;gap:0.5rem;">

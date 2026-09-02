@@ -21,7 +21,7 @@ def _env_int(name: str, default: int) -> int:
 
 @dataclass(frozen=True)
 class Settings:
-    cluster_ip: str = os.environ.get("PSTORE_CLUSTER_IP", "192.168.1.40")
+    cluster_ip: str = os.environ.get("PSTORE_CLUSTER_IP", "")
     host: str = os.environ.get("PSTORE_HOST", "127.0.0.1")
     port: int = _env_int("PSTORE_PORT", 9090)
 

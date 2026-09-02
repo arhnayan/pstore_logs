@@ -21,11 +21,18 @@ function toast(msg) {
   setTimeout(() => el.classList.remove('show'), 3000);
 }
 
+function fmtErrorDetail(detail) {
+  if (!detail) return '';
+  if (typeof detail === 'string') return detail;
+  if (Array.isArray(detail)) return detail.map(item => item.msg || JSON.stringify(item)).join('; ');
+  return JSON.stringify(detail);
+}
+
 async function api(path, opts = {}) {
   const res = await fetch(path, opts);
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }));
-    throw new Error(err.detail || res.statusText);
+    throw new Error(fmtErrorDetail(err.detail) || res.statusText);
   }
   if (res.headers.get('content-type')?.includes('application/json')) return res.json();
   return res;
@@ -1051,12 +1058,50 @@ async function loadStorage() { state.storage = await api('/api/storage'); render
 async function loadNas() { state.nas = await api('/api/nas'); renderNas(); }
 async function loadAudit() { const data = await api('/api/audit'); state.audit = data.items; state.auditAccess = data.access; renderAudit(); }
 async function loadCollections() { try { state.collections = (await api('/api/datacollection')).items; } catch { state.collections = []; } renderCollections(); }
+function updateClusterLabel(name, clusterIp) {
+  const label = $('#cluster-label');
+  if (!label) return;
+  if (name && clusterIp) {
+    label.textContent = `${name} · ${clusterIp}`;
+  } else if (clusterIp) {
+    label.textContent = clusterIp;
+  } else {
+    label.textContent = 'Select location in Settings';
+  }
+}
+
 async function loadSettings() {
   const data = await api('/api/settings');
-  $('#cluster-label').textContent = data.cluster_ip;
-  $('#settings-cluster').value = data.cluster_ip;
+  updateClusterLabel(data.monitor_location, data.cluster_ip);
+  const ipEl = $('#settings-cluster-ip');
+  if (ipEl) ipEl.textContent = data.cluster_ip ? `Cluster IP: ${data.cluster_ip}` : 'Cluster IP: —';
+
+  const select = $('#settings-location');
+  if (select) {
+    const locations = data.locations || [];
+    select.innerHTML = locations.map(loc =>
+      `<option value="${loc.name}">${loc.name} (${loc.cluster_ip})</option>`
+    ).join('');
+    if (data.monitor_location) select.value = data.monitor_location;
+    else if (locations.length) select.value = locations[0].name;
+  }
+
   if (data.username) $('#settings-username').value = data.username;
+  state.status = { ...state.status, monitor_location: data.monitor_location, cluster_ip: data.cluster_ip };
   renderReportsCredsWarning(!data.has_credentials);
+}
+
+async function saveMonitorLocation(name) {
+  const result = await api('/api/settings/cluster-location', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  });
+  updateClusterLabel(result.name, result.cluster_ip);
+  const ipEl = $('#settings-cluster-ip');
+  if (ipEl) ipEl.textContent = `Cluster IP: ${result.cluster_ip}`;
+  toast(`Monitoring ${result.name} (${result.cluster_ip})`);
+  await loadOverview();
 }
 
 async function loadReportLocations() {
@@ -1229,12 +1274,28 @@ function setupFilters() {
 }
 
 function setupSettings() {
+  $('#settings-location')?.addEventListener('change', async e => {
+    try {
+      await saveMonitorLocation(e.target.value);
+    } catch (err) {
+      toast('Location change failed: ' + err.message);
+      await loadSettings();
+    }
+  });
+
   $('#settings-form')?.addEventListener('submit', async e => {
     e.preventDefault();
     try {
-      await api('/api/settings/credentials', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      const result = await api('/api/settings/credentials', { method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username: $('#settings-username').value, password: $('#settings-password').value }) });
-      toast('Credentials saved'); $('#settings-password').value = ''; await loadOverview();
+      if (result.validated === false) {
+        toast(result.warning || 'Credentials saved (login not verified — cluster unreachable)');
+      } else {
+        toast(result.tested_ip ? `Credentials saved (verified at ${result.tested_ip})` : 'Credentials saved');
+      }
+      $('#settings-password').value = '';
+      await loadSettings();
+      await loadOverview();
     } catch (err) { toast('Save failed: ' + err.message); }
   });
   $('#clear-credentials')?.addEventListener('click', async () => { await api('/api/settings/credentials', { method: 'DELETE' }); toast('Credentials cleared'); await loadOverview(); });
@@ -1271,7 +1332,16 @@ function setupSSE() {
   es.onmessage = ev => {
     try {
       const msg = JSON.parse(ev.data);
-      if (msg.type === 'status') { state.status = { ...state.status, ...msg.data }; updateConnection(state.status); }
+      if (msg.type === 'status') {
+        state.status = { ...state.status, ...msg.data };
+        updateConnection(state.status);
+        if (msg.data.cluster_ip || msg.data.monitor_location) {
+          updateClusterLabel(
+            msg.data.monitor_location || state.status.monitor_location,
+            msg.data.cluster_ip || state.status.cluster_ip
+          );
+        }
+      }
       else if (msg.type === 'alerts') { loadAlerts().then(() => loadOverview()); }
       else if (msg.type === 'events') loadEvents();
       else if (msg.type === 'hardware') { loadHardware(); loadPorts(); loadOverview(); loadResources(); }
