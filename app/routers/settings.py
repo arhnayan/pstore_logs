@@ -10,7 +10,7 @@ from app.client import PowerStoreAuthError, PowerStoreClient
 from app.config import settings
 from app.credentials import clear_credentials, get_credentials, has_credentials, set_credentials
 from app.deps import collector, db
-from app.locations import ensure_locations
+from app.locations import DEFAULT_LOCATIONS, ensure_locations
 from app.monitor_target import (
     get_active_cluster_ip,
     get_monitor_location_name,
@@ -45,11 +45,14 @@ class ClusterLocationPayload(BaseModel):
 async def get_settings() -> dict:
     creds = await get_credentials()
     locations = await ensure_locations(db)
+    options = monitor_options(locations)
+    if not options:
+        options = monitor_options(DEFAULT_LOCATIONS)
     cluster_ip = await get_active_cluster_ip(db) or ""
     return {
         "cluster_ip": cluster_ip,
         "monitor_location": await get_monitor_location_name(db) or "",
-        "locations": monitor_options(locations),
+        "locations": options,
         "has_credentials": await has_credentials(),
         "username": creds[0] if creds else None,
         "poll_intervals": {

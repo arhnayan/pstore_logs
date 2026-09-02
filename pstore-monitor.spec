@@ -23,7 +23,11 @@ a = Analysis(
     ["run_standalone.py"],
     pathex=[],
     binaries=[],
-    datas=[("app/static", "app/static")],
+    datas=[
+        ("app/static", "app/static"),
+        ("vodafone-rapor-2/raw_report_csv", "report_csv"),
+        ("vodafone-rapor-2/formatted_report_csv", "report_capacity_csv"),
+    ],
     hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},

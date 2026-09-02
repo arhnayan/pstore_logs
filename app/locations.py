@@ -77,14 +77,13 @@ DEFAULT_LOCATIONS: list[dict[str, Any]] = [
         "cluster_ip": "10.197.143.201",
         "servers": [
             "ANKTOCDELLCLD01", "ANKTOCDELLAPP01", "ANKTOCDELLAPP02",
-            "ANKTOCDELLAPP03", "ANKTOCDELLAPP04", "ANKTOCDELLOSS01",
+            "ANKTOCDELLAPP03", "ANKTOCDELLOSS01",
         ],
         "server_ips": {
             "ANKTOCDELLCLD01": "10.197.143.201",
             "ANKTOCDELLAPP01": "10.197.143.205",
             "ANKTOCDELLAPP02": "10.197.143.213",
             "ANKTOCDELLAPP03": "10.197.143.217",
-            "ANKTOCDELLAPP04": "10.197.143.221",
             "ANKTOCDELLOSS01": "10.197.143.209",
         },
         "enabled": True,
@@ -135,9 +134,18 @@ async def ensure_locations(db: Database) -> list[dict[str, Any]]:
             if current is None:
                 updates.append(default)
                 continue
-            if not (current.get("server_ips") or {}):
-                updates.append({**default, **current, "servers": default["servers"], "server_ips": default["server_ips"]})
-            elif not (current.get("cluster_ip") or "").strip() and default.get("cluster_ip"):
+            needs_ips = not location_has_ips(current)
+            missing_cluster_ip = not (current.get("cluster_ip") or "").strip() and default.get("cluster_ip")
+            stale_servers = current.get("servers") != default["servers"]
+            if needs_ips or stale_servers:
+                updates.append({
+                    **default,
+                    **current,
+                    "servers": default["servers"],
+                    "server_ips": default["server_ips"],
+                    "cluster_ip": default.get("cluster_ip", current.get("cluster_ip", "")),
+                })
+            elif missing_cluster_ip:
                 updates.append({**current, "cluster_ip": default["cluster_ip"]})
         if updates:
             await db.upsert_report_locations(updates)

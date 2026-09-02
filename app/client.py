@@ -339,6 +339,8 @@ class PowerStoreClient:
         )
         if resp.status_code in (400, 422):
             return []
+        if resp.status_code == 403:
+            raise PowerStoreAuthError("Insufficient permissions for metrics")
         resp.raise_for_status()
         if resp.status_code == 204:
             return []

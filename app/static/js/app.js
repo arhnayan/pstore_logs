@@ -8,7 +8,7 @@ const state = {
   cluster: null, protection: null, portMetrics: null, resources: null,
   charts: {}, volumeNames: {}, hostNames: {}, portNames: {},
   pinnedVolumeId: null, collectionPollTimer: null,
-  reportLocations: [], reportStatus: null,
+  reportLocations: [], reportStatus: null, reportPollTimer: null,
 };
 
 function $(sel) { return document.querySelector(sel); }
@@ -1071,24 +1071,34 @@ function updateClusterLabel(name, clusterIp) {
 }
 
 async function loadSettings() {
-  const data = await api('/api/settings');
-  updateClusterLabel(data.monitor_location, data.cluster_ip);
-  const ipEl = $('#settings-cluster-ip');
-  if (ipEl) ipEl.textContent = data.cluster_ip ? `Cluster IP: ${data.cluster_ip}` : 'Cluster IP: —';
+  try {
+    const data = await api('/api/settings');
+    updateClusterLabel(data.monitor_location, data.cluster_ip);
+    const ipEl = $('#settings-cluster-ip');
+    if (ipEl) ipEl.textContent = data.cluster_ip ? `Cluster IP: ${data.cluster_ip}` : 'Cluster IP: —';
 
-  const select = $('#settings-location');
-  if (select) {
-    const locations = data.locations || [];
-    select.innerHTML = locations.map(loc =>
-      `<option value="${loc.name}">${loc.name} (${loc.cluster_ip})</option>`
-    ).join('');
-    if (data.monitor_location) select.value = data.monitor_location;
-    else if (locations.length) select.value = locations[0].name;
+    const select = $('#settings-location');
+    if (select) {
+      const locations = data.locations || [];
+      if (!locations.length) {
+        select.innerHTML = '<option value="">No locations available — check Reports page IPs</option>';
+      } else {
+        select.innerHTML = locations.map(loc =>
+          `<option value="${loc.name}">${loc.name} (${loc.cluster_ip})</option>`
+        ).join('');
+        if (data.monitor_location) select.value = data.monitor_location;
+        else select.value = locations[0].name;
+      }
+    }
+
+    if (data.username) $('#settings-username').value = data.username;
+    state.status = { ...state.status, monitor_location: data.monitor_location, cluster_ip: data.cluster_ip };
+    renderReportsCredsWarning(!data.has_credentials);
+  } catch (err) {
+    const select = $('#settings-location');
+    if (select) select.innerHTML = `<option value="">Failed to load locations: ${err.message}</option>`;
+    toast('Settings load failed: ' + err.message);
   }
-
-  if (data.username) $('#settings-username').value = data.username;
-  state.status = { ...state.status, monitor_location: data.monitor_location, cluster_ip: data.cluster_ip };
-  renderReportsCredsWarning(!data.has_credentials);
 }
 
 async function saveMonitorLocation(name) {
@@ -1156,10 +1166,21 @@ function renderReportStatus() {
   const progress = $('#report-progress');
   const error = $('#report-error');
   const download = $('#report-download');
-  if (progress) progress.textContent = status.progress || '';
-  if (error) error.textContent = status.error || '';
+  if (progress) {
+    let text = status.progress || '';
+    if (status.servers_with_data) text += ` (${status.servers_with_data} servers with data)`;
+    progress.textContent = text;
+  }
+  if (error) {
+    const locErrors = status.location_status
+      ? Object.entries(status.location_status)
+          .filter(([, data]) => data?.phase === 'location_done' && data?.error)
+          .map(([name, data]) => `${name}: ${data.error}`)
+      : [];
+    error.textContent = status.error || locErrors.join(' | ');
+  }
   if (download) {
-    if (status.filename && !status.running) {
+    if (status.filename && !status.running && !status.error) {
       download.innerHTML = `<a href="/api/reports/download/${status.filename}" download>Download ${status.filename}</a>`;
     } else {
       download.textContent = '';
@@ -1167,6 +1188,23 @@ function renderReportStatus() {
   }
   const btn = $('#generate-report');
   if (btn) btn.disabled = !!status.running;
+  if (status.running && !state.reportPollTimer) {
+    state.reportPollTimer = setInterval(async () => {
+      try {
+        state.reportStatus = await api('/api/reports/status');
+        renderReportStatus();
+        if (!state.reportStatus.running) {
+          clearInterval(state.reportPollTimer);
+          state.reportPollTimer = null;
+          await loadReportLocations();
+        }
+      } catch { /* ignore */ }
+    }, 2000);
+  }
+  if (!status.running && state.reportPollTimer) {
+    clearInterval(state.reportPollTimer);
+    state.reportPollTimer = null;
+  }
 }
 
 async function saveReportLocations() {
@@ -1257,6 +1295,7 @@ function setupNav() {
       $$('.page').forEach(p => p.classList.remove('active'));
       $(`#page-${page}`).classList.add('active');
       if (page === 'support') loadCollections();
+      if (page === 'settings') loadSettings();
       if (page === 'reports') { loadReportLocations(); loadReportStatus(); loadSettings(); }
       if (page === 'protection') loadProtection();
       if (page === 'resources') { loadResources().then(() => renderResources()); }
@@ -1275,8 +1314,10 @@ function setupFilters() {
 
 function setupSettings() {
   $('#settings-location')?.addEventListener('change', async e => {
+    const name = e.target.value;
+    if (!name) return;
     try {
-      await saveMonitorLocation(e.target.value);
+      await saveMonitorLocation(name);
     } catch (err) {
       toast('Location change failed: ' + err.message);
       await loadSettings();

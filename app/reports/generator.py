@@ -36,7 +36,7 @@ DEFAULT_LOCATION_SERVERS = {
     ],
     'Pursaklar': [
         'ANKTOCDELLCLD01', 'ANKTOCDELLAPP01', 'ANKTOCDELLAPP02',
-        'ANKTOCDELLAPP03', 'ANKTOCDELLAPP04', 'ANKTOCDELLOSS01'
+        'ANKTOCDELLAPP03', 'ANKTOCDELLOSS01'
     ],
     'Tuzla': [
         'TZLTOCDELLCLD01', 'TZLTOCDELLAPP01', 'TZLTOCDELLAPP02',
@@ -873,7 +873,7 @@ class ReportGenerator:
                         if stats and 'mean' in stats and stats['mean'] > 0:
                             perf_stats[metric] = stats
 
-            capacity_data = self._capacity_data.get(server, {})
+            capacity_data = self._capacity_data.get(server.upper(), self._capacity_data.get(server, {}))
             current_row = self.create_server_section(ws, server, capacity_data, perf_stats, current_row)
         
         # Create analytics sheet with charts (optional)
