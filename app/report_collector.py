@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from pathlib import Path
 from typing import Any, Callable
 
 import pandas as pd
@@ -14,18 +13,12 @@ from app.config import settings
 from app.db import Database, utc_now
 from app.locations import location_has_ips, location_servers
 from app.monitor_target import location_management_ip
-from app.paths import report_capacity_dir, report_csv_dir
 from app.reports.generator import ReportGenerator
 
 logger = logging.getLogger(__name__)
 
 ProgressFn = Callable[[str, dict[str, Any]], None]
 TB = 1024**4
-
-_LOCATION_CSV_ALIASES: dict[str, list[str]] = {
-    "Diyarbakır": ["Diyarbakir", "Diyarbakır"],
-}
-
 
 def _us_to_ms(value: Any) -> float | None:
     if value is None:
@@ -109,7 +102,10 @@ def samples_to_dataframe(samples: list[dict[str, Any]]) -> pd.DataFrame | None:
                 "Total IOPS": _num(sample.get("avg_total_iops"), sample.get("total_iops")),
                 "Read IOPS": _num(sample.get("avg_read_iops"), sample.get("read_iops")),
                 "Write IOPS": _num(sample.get("avg_write_iops"), sample.get("write_iops")),
-                "CPU Utilization": None,
+                "CPU Utilization": _num(
+                    sample.get("avg_cpu_utilization"),
+                    sample.get("cpu_utilization"),
+                ),
             }
         )
     df = pd.DataFrame(rows)
@@ -126,24 +122,6 @@ def samples_to_dataframe(samples: list[dict[str, Any]]) -> pd.DataFrame | None:
     df = df[mask]
     df = df[df["Timestamp"].astype(str).str.strip() != ""]
     return df.reset_index(drop=True) if not df.empty else None
-
-
-def _location_csv_names(location_name: str) -> list[str]:
-    names = [location_name]
-    names.extend(_LOCATION_CSV_ALIASES.get(location_name, []))
-    return list(dict.fromkeys(names))
-
-
-def load_csv_performance(csv_dir: Path | None, location_name: str, server: str) -> pd.DataFrame | None:
-    if csv_dir is None or not csv_dir.is_dir():
-        return None
-    reader = ReportGenerator()
-    for loc_name in _location_csv_names(location_name):
-        prefix = f"{loc_name}_{server}-"
-        for path in sorted(csv_dir.glob("*.csv")):
-            if path.name.startswith(prefix):
-                return reader.read_performance_data(str(path))
-    return None
 
 
 async def _compute_host_capacity(
@@ -183,6 +161,51 @@ async def _compute_host_capacity(
         "Free_TB": free_bytes / TB,
         "Used_TB": used_bytes / TB,
     }
+
+
+async def fetch_cluster_data(
+    client: PowerStoreClient,
+    *,
+    interval: str = "One_Hour",
+) -> tuple[pd.DataFrame | None, dict[str, float], str | None]:
+    """Fetch one PowerStore system using its own management endpoint."""
+    try:
+        clusters = await client.get_cluster()
+        if not clusters or clusters[0].get("id") is None:
+            return None, {}, "Cluster identity not returned"
+
+        cluster_id = str(clusters[0]["id"])
+        samples = await client.generate_metrics(
+            "performance_metrics_by_cluster",
+            cluster_id,
+            interval,
+        )
+        df = samples_to_dataframe(samples)
+        if df is None:
+            return None, {}, "No performance metrics returned"
+
+        capacity: dict[str, float] = {}
+        space_samples = await client.generate_metrics(
+            "space_metrics_by_cluster",
+            cluster_id,
+            interval,
+        )
+        if space_samples:
+            latest = space_samples[-1]
+            total = _num(latest.get("physical_total"))
+            used = _num(latest.get("physical_used"))
+            if total is not None and total > 0 and used is not None:
+                capacity = {
+                    "Total_TB": total / TB,
+                    "Free_TB": max(total - used, 0.0) / TB,
+                    "Used_TB": used / TB,
+                }
+        return df, capacity, None
+    except PowerStoreAuthError as exc:
+        return None, {}, str(exc)
+    except Exception as exc:
+        logger.exception("Failed fetching cluster metrics from %s", client.cluster_ip)
+        return None, {}, str(exc)
 
 
 async def fetch_server_data(
@@ -229,89 +252,63 @@ async def fetch_location_data(
     username: str,
     password: str,
     *,
-    csv_dir: Path | None = None,
     interval: str = "One_Hour",
     on_progress: ProgressFn | None = None,
 ) -> tuple[dict[str, pd.DataFrame], dict[str, dict[str, float]], str | None]:
     name = location["name"]
     servers = location.get("servers", [])
-    cluster_ip = location_management_ip(location)
+    server_ips = dict(location.get("server_ips") or {})
+    default_ip = location_management_ip(location)
     if not servers:
         return {}, {}, "No servers configured"
-    if not cluster_ip:
-        return {}, {}, "No cluster management IP configured"
+    if not default_ip and not server_ips:
+        return {}, {}, "No management IPs configured"
 
     server_data: dict[str, pd.DataFrame] = {}
     capacity_data: dict[str, dict[str, float]] = {}
-    errors: list[str] = []
     api_errors: list[str] = []
 
-    client = PowerStoreClient(cluster_ip=cluster_ip, username=username, password=password)
-    await client.open()
-    hosts: list[dict[str, Any]] = []
-    appliances: list[dict[str, Any]] = []
-    mappings: list[dict[str, Any]] = []
-    volumes: list[dict[str, Any]] = []
-    try:
-        await client.login(username, password)
-        hosts = await client.get_hosts()
-        appliances = await client.get_appliances()
-        mappings = await client.get_host_volume_mappings()
-        volumes = await client.get_volumes(primary_only=False)
-    except PowerStoreAuthError as exc:
-        api_errors.append(f"{cluster_ip}: {exc}")
-    except Exception as exc:
-        logger.exception("Failed connecting to %s (%s)", name, cluster_ip)
-        api_errors.append(f"Cannot connect to {cluster_ip}: {exc.__class__.__name__}")
-    else:
-        for idx, server in enumerate(servers, start=1):
-            if on_progress:
-                on_progress(
-                    name,
-                    {
-                        "phase": "host",
-                        "current": idx,
-                        "total": len(servers),
-                        "server": server,
-                        "mgmt_ip": cluster_ip,
-                    },
-                )
-            df, cap, err = await fetch_server_data(
-                client,
-                server,
-                hosts=hosts,
-                appliances=appliances,
-                mappings=mappings,
-                volumes=volumes,
-                interval=interval,
+    for idx, server in enumerate(servers, start=1):
+        target_ip = str(server_ips.get(server) or default_ip).strip()
+        if on_progress:
+            on_progress(
+                name,
+                {
+                    "phase": "host",
+                    "current": idx,
+                    "total": len(servers),
+                    "server": server,
+                    "mgmt_ip": target_ip,
+                },
             )
-            if err:
-                api_errors.append(f"{server}: {err}")
-            if df is not None:
-                server_data[server] = df
-            if cap:
-                capacity_data[server] = cap
-    finally:
-        await client.close()
-
-    for server in servers:
-        if server in server_data:
+        if not target_ip:
+            api_errors.append(f"{server}: No management IP configured")
             continue
-        df = load_csv_performance(csv_dir, name, server)
-        if df is not None and not df.empty:
+
+        client = PowerStoreClient(cluster_ip=target_ip, username=username, password=password)
+        await client.open()
+        try:
+            await client.login(username, password)
+            df, cap, err = await fetch_cluster_data(client, interval=interval)
+        except PowerStoreAuthError as exc:
+            df, cap, err = None, {}, str(exc)
+        except Exception as exc:
+            logger.exception("Failed connecting to %s (%s)", server, target_ip)
+            df, cap, err = None, {}, f"Cannot connect to {target_ip}: {exc.__class__.__name__}"
+        finally:
+            await client.close()
+
+        if err:
+            api_errors.append(f"{server}: {err}")
+        if df is not None:
             server_data[server] = df
+        if cap:
+            capacity_data[server] = cap
 
-    if api_errors:
-        errors.extend(api_errors)
-
-    if not server_data and errors:
-        return server_data, capacity_data, "; ".join(errors)
-    if errors and not api_errors:
-        return server_data, capacity_data, "; ".join(errors)
+    if not server_data and api_errors:
+        return server_data, capacity_data, "; ".join(api_errors)
     if api_errors and server_data:
         return server_data, capacity_data, f"Partial API failures: {'; '.join(api_errors[:3])}"
-    if api_errors:
-        return server_data, capacity_data, "; ".join(api_errors)
     return server_data, capacity_data, None
 
 
@@ -325,14 +322,15 @@ class ReportCollector:
         username: str,
         password: str,
         *,
+        days: int = 30,
         on_progress: ProgressFn | None = None,
     ) -> dict[str, Any]:
+        if days != 30:
+            raise ValueError("PowerStore reports support exactly the latest 30 days")
         enabled = [loc for loc in locations if loc.get("enabled", True) and location_has_ips(loc)]
         if not enabled:
             raise ValueError("No enabled locations with server MGMT IPs configured")
 
-        csv_dir = report_csv_dir()
-        capacity_dir = report_capacity_dir()
         all_server_data: dict[str, pd.DataFrame] = {}
         all_capacity: dict[str, dict[str, float]] = {}
         loc_map = location_servers(enabled)
@@ -346,7 +344,6 @@ class ReportCollector:
                     loc,
                     username,
                     password,
-                    csv_dir=csv_dir,
                     on_progress=on_progress,
                 )
                 all_server_data.update(data)
@@ -366,10 +363,8 @@ class ReportCollector:
             hint = (
                 "No performance data retrieved from any location. "
                 "Common causes: metrics API denied (403 — need Administrator/Performance Monitor role), "
-                "hosts not registered under expected names, or network cannot reach cluster IPs."
+                "invalid credentials, or network cannot reach the configured server management IPs."
             )
-            if csv_dir:
-                hint += f" CSV fallback directory found at {csv_dir} but no matching files loaded."
             raise ValueError(hint)
 
         if on_progress:
@@ -379,10 +374,10 @@ class ReportCollector:
             output_dir=str(settings.reports_dir),
             location_servers=loc_map,
             server_data=all_server_data,
-            raw_csv_dir=str(csv_dir) if csv_dir else None,
-            formatted_csv_dir=str(capacity_dir) if capacity_dir else None,
-            load_capacity_from_formatted_csv=capacity_dir is not None and not all_capacity,
-            enable_analytics=True,
+            raw_csv_dir=None,
+            formatted_csv_dir=None,
+            load_capacity_from_formatted_csv=False,
+            enable_analytics=False,
         )
         if all_capacity:
             generator.set_capacity_data(all_capacity)
@@ -392,5 +387,6 @@ class ReportCollector:
             "filename": "All_Locations_Storage_Report.xlsx",
             "locations": len(enabled),
             "servers_with_data": len(all_server_data),
-            "used_csv_fallback": csv_dir is not None,
+            "range_days": days,
+            "used_csv_fallback": False,
         }

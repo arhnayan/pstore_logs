@@ -44,7 +44,7 @@ class LocationsPayload(BaseModel):
 
 
 class GeneratePayload(BaseModel):
-    days: int = 30
+    days: int = Field(default=30, ge=30, le=30)
 
 
 def _set_job(**kwargs) -> None:
@@ -71,7 +71,7 @@ async def report_status() -> dict:
 
 @router.post("/generate")
 async def generate_report(payload: GeneratePayload | None = None) -> dict:
-    del payload  # reserved for future date-range filtering
+    request = payload or GeneratePayload()
     if _job_state.get("running"):
         raise HTTPException(status_code=409, detail="Report generation already in progress")
     if not await has_credentials():
@@ -126,11 +126,12 @@ async def generate_report(payload: GeneratePayload | None = None) -> dict:
                 locations,
                 username,
                 password,
+                days=request.days,
                 on_progress=on_progress,
             )
             _set_job(
                 running=False,
-                progress=f"Report ready ({result['servers_with_data']} servers with data)",
+                progress="Report ready",
                 output_file=result["output_file"],
                 filename=result["filename"],
                 error=None,
