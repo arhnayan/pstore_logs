@@ -30,7 +30,13 @@ def _num(payload: dict | None, *keys: str) -> float | int | None:
 
 def _cpu_pct(payload: dict | None) -> float | None:
     v = _num(payload, "io_workload_cpu_utilization", "avg_io_workload_cpu_utilization")
-    return float(v) if v is not None else None
+    return _normalize_cpu_pct(float(v)) if v is not None else None
+
+
+def _normalize_cpu_pct(value: float | None) -> float | None:
+    if value is None:
+        return None
+    return value * 100.0 if 0 <= value <= 1 else value
 
 
 def _cluster_cpu_fallback(
@@ -139,7 +145,9 @@ async def get_resources() -> dict[str, Any]:
             "name": app.get("name") or app["id"],
             "model": app.get("model"),
             "service_tag": app.get("service_tag"),
-            "cpu_utilization": _avg_field(recent, "io_workload_cpu_utilization", "avg_io_workload_cpu_utilization") or _cpu_pct(perf),
+            "cpu_utilization": _normalize_cpu_pct(
+                _avg_field(recent, "io_workload_cpu_utilization", "avg_io_workload_cpu_utilization")
+            ) or _cpu_pct(perf),
             "total_iops": _avg_field(recent, "total_iops", "avg_total_iops") if recent else _iops(perf),
             "avg_latency": _avg_field(recent, "avg_latency", require_iops=True),
             "physical_used": space.get("physical_used"),
@@ -170,7 +178,9 @@ async def get_resources() -> dict[str, Any]:
             "id": node["id"],
             "slot": node.get("slot"),
             "appliance_name": app.get("name"),
-            "cpu_utilization": _avg_field(recent, "io_workload_cpu_utilization", "avg_io_workload_cpu_utilization") or _cpu_pct(perf),
+            "cpu_utilization": _normalize_cpu_pct(
+                _avg_field(recent, "io_workload_cpu_utilization", "avg_io_workload_cpu_utilization")
+            ) or _cpu_pct(perf),
             "total_iops": _avg_field(recent, "total_iops", "avg_total_iops") if recent else _iops(perf),
             "avg_latency": _avg_field(recent, "avg_latency", require_iops=True),
             "current_logins": _num(perf, "current_logins", "avg_current_logins"),
@@ -229,10 +239,12 @@ async def get_resources() -> dict[str, Any]:
     if cluster_cpu is None:
         cluster_cpu = _cluster_cpu_fallback(appliance_perf, node_perf)
     if recent_cluster_perf:
-        cluster_cpu = _avg_field(
-            recent_cluster_perf,
-            "io_workload_cpu_utilization",
-            "avg_io_workload_cpu_utilization",
+        cluster_cpu = _normalize_cpu_pct(
+            _avg_field(
+                recent_cluster_perf,
+                "io_workload_cpu_utilization",
+                "avg_io_workload_cpu_utilization",
+            )
         ) or cluster_cpu
     cluster_iops = (
         _avg_field(recent_cluster_perf, "total_iops", "avg_total_iops")

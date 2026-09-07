@@ -354,7 +354,10 @@ class ReportGenerator:
         current_row += 1
         
         # Column headers
-        headers = ['Total (TB)', 'Free (TB)', 'Used (TB)', 'Latency', 'I/O Size', 'Total IOPS', 'CPU Utilization']
+        headers = [
+            'Total (TB)', 'Free (TB)', 'Used (TB)', 'Latency (ms)',
+            'I/O Size (KiB)', 'Total IOPS', 'CPU Utilization',
+        ]
         for col_idx, header in enumerate(headers, 1):
             cell = ws.cell(row=current_row, column=col_idx)
             cell.value = header
@@ -377,23 +380,30 @@ class ReportGenerator:
         else:
             used_tb = None
         
-        # Write numeric cells (so formulas/conditional formatting can work after manual edits)
+        total_value = float(total_tb) if total_tb not in (None, '') else None
+        free_value = float(free_tb) if free_tb not in (None, '') else None
+        used_value = float(used_tb) if used_tb not in (None, '') else None
+        if used_value is None and total_value is not None and free_value is not None:
+            used_value = max(total_value - free_value, 0.0)
+        usage_fraction = (
+            used_value / total_value
+            if used_value is not None and total_value is not None and total_value > 0
+            else None
+        )
+
+        # Store computed values directly so previewers do not need formula recalculation.
         total_cell = ws.cell(row=current_row, column=1)
         free_cell = ws.cell(row=current_row, column=2)
         used_cell = ws.cell(row=current_row, column=3)
 
-        total_cell.value = float(total_tb) if total_tb not in (None, '') else None
-        free_cell.value = float(free_tb) if free_tb not in (None, '') else None
-
-        # Always link Used to Total/Free so manual edits in Excel remain consistent,
-        # even when no capacity_data was provided at generation time.
-        used_cell.value = f'=IF(OR(A{current_row}="",B{current_row}=""),"",A{current_row}-B{current_row})'
+        total_cell.value = total_value
+        free_cell.value = free_value
+        used_cell.value = used_value
 
         for c in (total_cell, free_cell, used_cell):
             c.number_format = '0.00'
         
-        # Capacity utilization bar (formula-driven, so it updates after manual edits)
-        # This sits directly below the capacity columns (A-C) for the server.
+        # Capacity utilization bar.
         gauge_row = current_row + 1
 
         # Label
@@ -403,15 +413,11 @@ class ReportGenerator:
         label_cell.alignment = Alignment(horizontal='left')
         label_cell.border = self.BORDER
 
-        # Usage % cell (with formula referencing Total/Free cells above).
-        # Interpreted as a fraction (0–1) so that higher usage = more bar fill.
-        # If Total or Free is empty, keep this cell blank.
         bar_cell = ws.cell(row=gauge_row, column=2)
-        bar_cell.value = f'=IF(OR(A{current_row}="",B{current_row}=""),"", (A{current_row}-B{current_row})/A{current_row})'
+        bar_cell.value = usage_fraction
         bar_cell.number_format = '0.0%'
         bar_cell.border = self.BORDER
 
-        # Data Bar (single rule, value comes from formula).
         # Underlying value is a fraction (0–1), so max is 1.0 → fully filled bar.
         data_bar = DataBarRule(
             start_type="num", start_value=0,
@@ -425,7 +431,7 @@ class ReportGenerator:
 
         # Percentage text cell (mirrors bar cell, easier to read)
         pct_cell = ws.cell(row=gauge_row, column=3)
-        pct_cell.value = f'=IF(B{gauge_row}="","",TEXT(B{gauge_row},"0.0%"))'
+        pct_cell.value = f"{usage_fraction:.1%}" if usage_fraction is not None else None
         pct_cell.font = Font(bold=True)
         pct_cell.alignment = Alignment(horizontal="center")
         pct_cell.border = self.BORDER

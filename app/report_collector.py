@@ -29,6 +29,11 @@ def _us_to_ms(value: Any) -> float | None:
         return None
 
 
+def _bytes_to_kib(value: Any) -> float | None:
+    number = _num(value)
+    return number / 1024.0 if number is not None else None
+
+
 def _num(*values: Any) -> float | None:
     for value in values:
         if value is None:
@@ -52,12 +57,15 @@ def _format_timestamp(value: Any) -> str:
 
 
 def _cpu_value(sample: dict[str, Any]) -> float | None:
-    return _num(
+    value = _num(
         sample.get("avg_io_workload_cpu_utilization"),
         sample.get("io_workload_cpu_utilization"),
         sample.get("avg_cpu_utilization"),
         sample.get("cpu_utilization"),
     )
+    if value is None:
+        return None
+    return value * 100.0 if 0 <= value <= 1 else value
 
 
 def _aggregate_appliance_samples(sample_groups: list[list[dict[str, Any]]]) -> list[dict[str, Any]]:
@@ -180,9 +188,9 @@ def samples_to_dataframe(samples: list[dict[str, Any]]) -> pd.DataFrame | None:
                 "Latency": _us_to_ms(sample.get("avg_latency")),
                 "Read Latency": _us_to_ms(sample.get("avg_read_latency")),
                 "Write Latency": _us_to_ms(sample.get("avg_write_latency")),
-                "Avg. Size": _num(sample.get("avg_io_size")),
-                "Read Size": _num(sample.get("avg_read_size")),
-                "Write Size": _num(sample.get("avg_write_size")),
+                "Avg. Size": _bytes_to_kib(sample.get("avg_io_size")),
+                "Read Size": _bytes_to_kib(sample.get("avg_read_size")),
+                "Write Size": _bytes_to_kib(sample.get("avg_write_size")),
                 "Total IOPS": _num(sample.get("avg_total_iops"), sample.get("total_iops")),
                 "Read IOPS": _num(sample.get("avg_read_iops"), sample.get("read_iops")),
                 "Write IOPS": _num(sample.get("avg_write_iops"), sample.get("write_iops")),

@@ -75,13 +75,18 @@ async def live_metrics() -> dict:
     top_volumes = await db.top_io_by_entity("performance_metrics_by_volume")
     top_hosts = await db.top_io_by_entity("performance_metrics_by_host")
 
+    def normalize_cpu(value: float | None) -> float | None:
+        if value is None:
+            return None
+        return value * 100.0 if 0 <= value <= 1 else value
+
     def cpu_util(payload: dict | None) -> float | None:
         if not payload:
             return None
         v = payload.get("io_workload_cpu_utilization")
         if v is None:
             v = payload.get("avg_io_workload_cpu_utilization")
-        return float(v) if v is not None else None
+        return normalize_cpu(float(v)) if v is not None else None
 
     def avg_field(
         samples: list[dict],
@@ -118,21 +123,29 @@ async def live_metrics() -> dict:
         recent_by_node.setdefault(sample["entity_id"], []).append(sample)
 
     cluster_cpu = cpu_util(cluster.get("payload") if cluster else None)
+    if cluster_cpu is None and appliances:
+        appliance_cpu = [cpu_util(item.get("payload")) for item in appliances]
+        values = [value for value in appliance_cpu if value is not None]
+        cluster_cpu = sum(values) / len(values) if values else None
     if cluster_cpu is None and recent_nodes:
-        cluster_cpu = avg_field(
-            recent_nodes,
-            "io_workload_cpu_utilization",
-            "avg_io_workload_cpu_utilization",
+        cluster_cpu = normalize_cpu(
+            avg_field(
+                recent_nodes,
+                "io_workload_cpu_utilization",
+                "avg_io_workload_cpu_utilization",
+            )
         )
 
     for node in nodes:
         recent = recent_by_node.get(node["entity_id"], [])
         node["recent_avg"] = {
             "total_iops": avg_field(recent, "total_iops", "avg_total_iops"),
-            "io_workload_cpu_utilization": avg_field(
-                recent,
-                "io_workload_cpu_utilization",
-                "avg_io_workload_cpu_utilization",
+            "io_workload_cpu_utilization": normalize_cpu(
+                avg_field(
+                    recent,
+                    "io_workload_cpu_utilization",
+                    "avg_io_workload_cpu_utilization",
+                )
             ),
         }
 
