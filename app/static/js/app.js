@@ -73,8 +73,12 @@ function applianceSummary(row) {
 
 function cpuUtil(payload) {
   if (!payload) return null;
-  const v = payload.io_workload_cpu_utilization ?? payload.avg_io_workload_cpu_utilization;
-  return v != null ? Number(v) : null;
+  const v = payload.max_io_workload_cpu_utilization
+    ?? payload.io_workload_cpu_utilization
+    ?? payload.avg_io_workload_cpu_utilization;
+  if (v == null) return null;
+  const value = Number(v);
+  return value >= 0 && value <= 1 ? value * 100 : value;
 }
 
 function fmtMbps(bytesPerSec) {
