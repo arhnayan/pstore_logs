@@ -51,6 +51,90 @@ def _format_timestamp(value: Any) -> str:
     return text.strip()
 
 
+def _cpu_value(sample: dict[str, Any]) -> float | None:
+    return _num(
+        sample.get("avg_io_workload_cpu_utilization"),
+        sample.get("io_workload_cpu_utilization"),
+        sample.get("avg_cpu_utilization"),
+        sample.get("cpu_utilization"),
+    )
+
+
+def _aggregate_appliance_samples(sample_groups: list[list[dict[str, Any]]]) -> list[dict[str, Any]]:
+    """Combine appliance series into one cluster-like hourly series."""
+    by_timestamp: dict[str, list[dict[str, Any]]] = {}
+    for samples in sample_groups:
+        for sample in samples:
+            timestamp = str(sample.get("timestamp") or "")
+            if timestamp:
+                by_timestamp.setdefault(timestamp, []).append(sample)
+
+    def total(rows: list[dict[str, Any]], *keys: str) -> float | None:
+        values = [_num(*(row.get(key) for key in keys)) for row in rows]
+        present = [value for value in values if value is not None]
+        return sum(present) if present else None
+
+    def weighted(
+        rows: list[dict[str, Any]],
+        value_key: str,
+        weight_keys: tuple[str, ...],
+    ) -> float | None:
+        pairs: list[tuple[float, float]] = []
+        unweighted: list[float] = []
+        for row in rows:
+            value = _num(row.get(value_key))
+            if value is None:
+                continue
+            unweighted.append(value)
+            weight = _num(*(row.get(key) for key in weight_keys))
+            if weight is not None and weight > 0:
+                pairs.append((value, weight))
+        if pairs:
+            weight_sum = sum(weight for _, weight in pairs)
+            return sum(value * weight for value, weight in pairs) / weight_sum
+        return sum(unweighted) / len(unweighted) if unweighted else None
+
+    combined: list[dict[str, Any]] = []
+    for timestamp, rows in sorted(by_timestamp.items()):
+        cpu_values = [value for row in rows if (value := _cpu_value(row)) is not None]
+        combined.append(
+            {
+                "timestamp": timestamp,
+                "avg_latency": weighted(rows, "avg_latency", ("avg_total_iops", "total_iops")),
+                "avg_read_latency": weighted(rows, "avg_read_latency", ("avg_read_iops", "read_iops")),
+                "avg_write_latency": weighted(rows, "avg_write_latency", ("avg_write_iops", "write_iops")),
+                "avg_io_size": weighted(rows, "avg_io_size", ("avg_total_iops", "total_iops")),
+                "avg_read_size": weighted(rows, "avg_read_size", ("avg_read_iops", "read_iops")),
+                "avg_write_size": weighted(rows, "avg_write_size", ("avg_write_iops", "write_iops")),
+                "avg_total_iops": total(rows, "avg_total_iops", "total_iops"),
+                "avg_read_iops": total(rows, "avg_read_iops", "read_iops"),
+                "avg_write_iops": total(rows, "avg_write_iops", "write_iops"),
+                "avg_io_workload_cpu_utilization": (
+                    sum(cpu_values) / len(cpu_values) if cpu_values else None
+                ),
+            }
+        )
+    return combined
+
+
+def _add_appliance_cpu(
+    cluster_samples: list[dict[str, Any]],
+    appliance_samples: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    cpu_by_timestamp = {
+        str(sample.get("timestamp") or ""): _cpu_value(sample)
+        for sample in appliance_samples
+    }
+    enriched = []
+    for sample in cluster_samples:
+        row = dict(sample)
+        cpu = cpu_by_timestamp.get(str(sample.get("timestamp") or ""))
+        if cpu is not None:
+            row["avg_io_workload_cpu_utilization"] = cpu
+        enriched.append(row)
+    return enriched
+
+
 def _host_aliases(name: str) -> list[str]:
     upper = name.upper()
     aliases = [upper]
@@ -102,10 +186,7 @@ def samples_to_dataframe(samples: list[dict[str, Any]]) -> pd.DataFrame | None:
                 "Total IOPS": _num(sample.get("avg_total_iops"), sample.get("total_iops")),
                 "Read IOPS": _num(sample.get("avg_read_iops"), sample.get("read_iops")),
                 "Write IOPS": _num(sample.get("avg_write_iops"), sample.get("write_iops")),
-                "CPU Utilization": _num(
-                    sample.get("avg_cpu_utilization"),
-                    sample.get("cpu_utilization"),
-                ),
+                "CPU Utilization": _cpu_value(sample),
             }
         )
     df = pd.DataFrame(rows)
@@ -115,11 +196,6 @@ def samples_to_dataframe(samples: list[dict[str, Any]]) -> pd.DataFrame | None:
     df = df.dropna(how="all", subset=data_cols)
     if df.empty:
         return None
-    mask = pd.Series([False] * len(df), index=df.index)
-    for metric in ("Total IOPS", "Latency"):
-        if metric in df.columns:
-            mask = mask | ((df[metric].notna()) & (df[metric] > 0))
-    df = df[mask]
     df = df[df["Timestamp"].astype(str).str.strip() != ""]
     return df.reset_index(drop=True) if not df.empty else None
 
@@ -180,16 +256,55 @@ async def fetch_cluster_data(
             cluster_id,
             interval,
         )
+        if not samples and cluster_id != "0":
+            samples = await client.generate_metrics(
+                "performance_metrics_by_cluster",
+                "0",
+                interval,
+            )
+
+        appliance_sample_groups: list[list[dict[str, Any]]] = []
+        try:
+            appliances = await client.get_appliances()
+            for appliance in appliances:
+                appliance_id = appliance.get("id")
+                if appliance_id is not None:
+                    appliance_samples = await client.generate_metrics(
+                        "performance_metrics_by_appliance",
+                        str(appliance_id),
+                        interval,
+                    )
+                    if appliance_samples:
+                        appliance_sample_groups.append(appliance_samples)
+        except Exception:
+            logger.warning(
+                "Could not retrieve appliance metrics from %s",
+                client.cluster_ip,
+                exc_info=True,
+            )
+
+        aggregated_appliances = _aggregate_appliance_samples(appliance_sample_groups)
+        if samples and aggregated_appliances:
+            samples = _add_appliance_cpu(samples, aggregated_appliances)
+        elif not samples:
+            samples = aggregated_appliances
+
         df = samples_to_dataframe(samples)
         if df is None:
-            return None, {}, "No performance metrics returned"
+            return None, {}, "Metrics API returned no usable hourly samples"
 
         capacity: dict[str, float] = {}
         space_samples = await client.generate_metrics(
             "space_metrics_by_cluster",
             cluster_id,
-            interval,
+            "Five_Mins",
         )
+        if not space_samples and cluster_id != "0":
+            space_samples = await client.generate_metrics(
+                "space_metrics_by_cluster",
+                "0",
+                "Five_Mins",
+            )
         if space_samples:
             latest = space_samples[-1]
             total = _num(latest.get("physical_total"))
