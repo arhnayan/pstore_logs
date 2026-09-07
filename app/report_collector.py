@@ -58,8 +58,8 @@ def _format_timestamp(value: Any) -> str:
 
 def _cpu_value(sample: dict[str, Any]) -> float | None:
     return _num(
-        sample.get("avg_io_workload_cpu_utilization"),
         sample.get("io_workload_cpu_utilization"),
+        sample.get("avg_io_workload_cpu_utilization"),
         sample.get("avg_cpu_utilization"),
         sample.get("cpu_utilization"),
     )
