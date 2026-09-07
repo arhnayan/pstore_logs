@@ -57,12 +57,16 @@ def _format_timestamp(value: Any) -> str:
 
 
 def _cpu_value(sample: dict[str, Any]) -> float | None:
-    return _num(
+    value = _num(
+        sample.get("max_io_workload_cpu_utilization"),
         sample.get("io_workload_cpu_utilization"),
         sample.get("avg_io_workload_cpu_utilization"),
         sample.get("avg_cpu_utilization"),
         sample.get("cpu_utilization"),
     )
+    if value is None:
+        return None
+    return value * 100.0 if 0 <= value <= 1 else value
 
 
 def _hour_bucket(value: Any) -> Any:
