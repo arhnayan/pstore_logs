@@ -57,6 +57,7 @@ class PowerStoreClient:
         self.verify_ssl = verify_ssl
         self._client: httpx.AsyncClient | None = None
         self._csrf_token: str | None = None
+        self.last_metrics_error: str | None = None
 
     async def __aenter__(self) -> PowerStoreClient:
         await self.open()
@@ -332,12 +333,17 @@ class PowerStoreClient:
         entity_id: str,
         interval: str = "Five_Mins",
     ) -> list[dict[str, Any]]:
+        self.last_metrics_error = None
         resp = await self._request(
             "POST",
             "/metrics/generate",
             json={"entity": entity, "entity_id": entity_id, "interval": interval},
         )
         if resp.status_code in (400, 422):
+            self.last_metrics_error = (
+                f"{entity} ({interval}, ID {entity_id}) rejected with "
+                f"HTTP {resp.status_code}: {parse_error_response(resp)}"
+            )
             return []
         if resp.status_code == 403:
             raise PowerStoreAuthError("Insufficient permissions for metrics")

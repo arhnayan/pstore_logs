@@ -259,17 +259,22 @@ async def fetch_cluster_data(
             return None, {}, "Cluster identity not returned"
 
         cluster_id = str(clusters[0]["id"])
+        metric_errors: list[str] = []
         samples = await client.generate_metrics(
             "performance_metrics_by_cluster",
             cluster_id,
             interval,
         )
+        if not samples and client.last_metrics_error:
+            metric_errors.append(client.last_metrics_error)
         if not samples and cluster_id != "0":
             samples = await client.generate_metrics(
                 "performance_metrics_by_cluster",
                 "0",
                 interval,
             )
+            if not samples and client.last_metrics_error:
+                metric_errors.append(client.last_metrics_error)
 
         appliance_sample_groups: list[list[dict[str, Any]]] = []
         try:
@@ -284,6 +289,8 @@ async def fetch_cluster_data(
                     )
                     if appliance_samples:
                         appliance_sample_groups.append(appliance_samples)
+                    elif client.last_metrics_error:
+                        metric_errors.append(client.last_metrics_error)
         except Exception:
             logger.warning(
                 "Could not retrieve appliance metrics from %s",
@@ -298,20 +305,25 @@ async def fetch_cluster_data(
             samples = aggregated_appliances
 
         df = samples_to_dataframe(samples)
+        performance_error = None
         if df is None:
-            return None, {}, "Metrics API returned no usable hourly samples"
+            performance_error = (
+                "; ".join(dict.fromkeys(metric_errors))
+                if metric_errors
+                else "Metrics API returned no hourly samples"
+            )
 
         capacity: dict[str, float] = {}
         space_samples = await client.generate_metrics(
             "space_metrics_by_cluster",
             cluster_id,
-            "Five_Mins",
+            interval,
         )
         if not space_samples and cluster_id != "0":
             space_samples = await client.generate_metrics(
                 "space_metrics_by_cluster",
                 "0",
-                "Five_Mins",
+                interval,
             )
         if space_samples:
             latest = space_samples[-1]
@@ -323,7 +335,7 @@ async def fetch_cluster_data(
                     "Free_TB": max(total - used, 0.0) / TB,
                     "Used_TB": used / TB,
                 }
-        return df, capacity, None
+        return df, capacity, performance_error
     except PowerStoreAuthError as exc:
         return None, {}, str(exc)
     except Exception as exc:
