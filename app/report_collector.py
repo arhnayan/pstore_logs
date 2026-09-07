@@ -177,6 +177,63 @@ def match_appliance(appliances: list[dict[str, Any]], expected_name: str) -> dic
     return None
 
 
+def _capacity_from_space_samples(samples: list[dict[str, Any]]) -> dict[str, float]:
+    if not samples:
+        return {}
+    latest = samples[-1]
+    total = _num(latest.get("physical_total"), latest.get("logical_provisioned"))
+    used = _num(latest.get("physical_used"), latest.get("logical_used"))
+    if total is None or total <= 0 or used is None:
+        return {}
+    return {
+        "Total_TB": total / TB,
+        "Free_TB": max(total - used, 0.0) / TB,
+        "Used_TB": used / TB,
+    }
+
+
+async def _fetch_capacity(
+    client: PowerStoreClient,
+    *,
+    cluster_id: str,
+    server: str | None = None,
+) -> dict[str, float]:
+    """Fetch current storage capacity (snapshot, not historical)."""
+    space_interval = "Five_Mins"
+
+    if server:
+        try:
+            appliances = await client.get_appliances()
+            appliance = match_appliance(appliances, server)
+            if appliance and appliance.get("id") is not None:
+                samples = await client.generate_metrics(
+                    "space_metrics_by_appliance",
+                    str(appliance["id"]),
+                    space_interval,
+                )
+                capacity = _capacity_from_space_samples(samples)
+                if capacity:
+                    return capacity
+        except Exception:
+            logger.warning(
+                "Could not retrieve appliance space metrics for %s from %s",
+                server,
+                client.cluster_ip,
+                exc_info=True,
+            )
+
+    for entity_id in (cluster_id, "0"):
+        samples = await client.generate_metrics(
+            "space_metrics_by_cluster",
+            entity_id,
+            space_interval,
+        )
+        capacity = _capacity_from_space_samples(samples)
+        if capacity:
+            return capacity
+    return {}
+
+
 def samples_to_dataframe(samples: list[dict[str, Any]]) -> pd.DataFrame | None:
     if not samples:
         return None
@@ -250,6 +307,7 @@ async def _compute_host_capacity(
 async def fetch_cluster_data(
     client: PowerStoreClient,
     *,
+    server: str | None = None,
     interval: str = "One_Hour",
 ) -> tuple[pd.DataFrame | None, dict[str, float], str | None]:
     """Fetch one PowerStore system using its own management endpoint."""
@@ -313,28 +371,7 @@ async def fetch_cluster_data(
                 else "Metrics API returned no hourly samples"
             )
 
-        capacity: dict[str, float] = {}
-        space_samples = await client.generate_metrics(
-            "space_metrics_by_cluster",
-            cluster_id,
-            interval,
-        )
-        if not space_samples and cluster_id != "0":
-            space_samples = await client.generate_metrics(
-                "space_metrics_by_cluster",
-                "0",
-                interval,
-            )
-        if space_samples:
-            latest = space_samples[-1]
-            total = _num(latest.get("physical_total"))
-            used = _num(latest.get("physical_used"))
-            if total is not None and total > 0 and used is not None:
-                capacity = {
-                    "Total_TB": total / TB,
-                    "Free_TB": max(total - used, 0.0) / TB,
-                    "Used_TB": used / TB,
-                }
+        capacity = await _fetch_capacity(client, cluster_id=cluster_id, server=server)
         return df, capacity, performance_error
     except PowerStoreAuthError as exc:
         return None, {}, str(exc)
@@ -424,7 +461,7 @@ async def fetch_location_data(
         await client.open()
         try:
             await client.login(username, password)
-            df, cap, err = await fetch_cluster_data(client, interval=interval)
+            df, cap, err = await fetch_cluster_data(client, server=server, interval=interval)
         except PowerStoreAuthError as exc:
             df, cap, err = None, {}, str(exc)
         except Exception as exc:
