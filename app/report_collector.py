@@ -57,15 +57,17 @@ def _format_timestamp(value: Any) -> str:
 
 
 def _cpu_value(sample: dict[str, Any]) -> float | None:
-    value = _num(
+    return _num(
         sample.get("avg_io_workload_cpu_utilization"),
         sample.get("io_workload_cpu_utilization"),
         sample.get("avg_cpu_utilization"),
         sample.get("cpu_utilization"),
     )
-    if value is None:
-        return None
-    return value * 100.0 if 0 <= value <= 1 else value
+
+
+def _hour_bucket(value: Any) -> Any:
+    timestamp = pd.to_datetime(value, utc=True, errors="coerce")
+    return timestamp.floor("h") if not pd.isna(timestamp) else str(value or "")
 
 
 def _aggregate_appliance_samples(sample_groups: list[list[dict[str, Any]]]) -> list[dict[str, Any]]:
@@ -129,14 +131,22 @@ def _add_appliance_cpu(
     cluster_samples: list[dict[str, Any]],
     appliance_samples: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    cpu_by_timestamp = {
-        str(sample.get("timestamp") or ""): _cpu_value(sample)
-        for sample in appliance_samples
+    cpu_values_by_hour: dict[Any, list[float]] = {}
+    for sample in appliance_samples:
+        cpu = _cpu_value(sample)
+        if cpu is not None:
+            cpu_values_by_hour.setdefault(
+                _hour_bucket(sample.get("timestamp")),
+                [],
+            ).append(cpu)
+    cpu_by_hour = {
+        hour: sum(values) / len(values)
+        for hour, values in cpu_values_by_hour.items()
     }
     enriched = []
     for sample in cluster_samples:
         row = dict(sample)
-        cpu = cpu_by_timestamp.get(str(sample.get("timestamp") or ""))
+        cpu = cpu_by_hour.get(_hour_bucket(sample.get("timestamp")))
         if cpu is not None:
             row["avg_io_workload_cpu_utilization"] = cpu
         enriched.append(row)
@@ -175,63 +185,6 @@ def match_appliance(appliances: list[dict[str, Any]], expected_name: str) -> dic
             if value in aliases or any(alias in value or value in alias for alias in aliases):
                 return appliance
     return None
-
-
-def _capacity_from_space_samples(samples: list[dict[str, Any]]) -> dict[str, float]:
-    if not samples:
-        return {}
-    latest = samples[-1]
-    total = _num(latest.get("physical_total"), latest.get("logical_provisioned"))
-    used = _num(latest.get("physical_used"), latest.get("logical_used"))
-    if total is None or total <= 0 or used is None:
-        return {}
-    return {
-        "Total_TB": total / TB,
-        "Free_TB": max(total - used, 0.0) / TB,
-        "Used_TB": used / TB,
-    }
-
-
-async def _fetch_capacity(
-    client: PowerStoreClient,
-    *,
-    cluster_id: str,
-    server: str | None = None,
-) -> dict[str, float]:
-    """Fetch current storage capacity (snapshot, not historical)."""
-    space_interval = "Five_Mins"
-
-    if server:
-        try:
-            appliances = await client.get_appliances()
-            appliance = match_appliance(appliances, server)
-            if appliance and appliance.get("id") is not None:
-                samples = await client.generate_metrics(
-                    "space_metrics_by_appliance",
-                    str(appliance["id"]),
-                    space_interval,
-                )
-                capacity = _capacity_from_space_samples(samples)
-                if capacity:
-                    return capacity
-        except Exception:
-            logger.warning(
-                "Could not retrieve appliance space metrics for %s from %s",
-                server,
-                client.cluster_ip,
-                exc_info=True,
-            )
-
-    for entity_id in (cluster_id, "0"):
-        samples = await client.generate_metrics(
-            "space_metrics_by_cluster",
-            entity_id,
-            space_interval,
-        )
-        capacity = _capacity_from_space_samples(samples)
-        if capacity:
-            return capacity
-    return {}
 
 
 def samples_to_dataframe(samples: list[dict[str, Any]]) -> pd.DataFrame | None:
@@ -307,7 +260,6 @@ async def _compute_host_capacity(
 async def fetch_cluster_data(
     client: PowerStoreClient,
     *,
-    server: str | None = None,
     interval: str = "One_Hour",
 ) -> tuple[pd.DataFrame | None, dict[str, float], str | None]:
     """Fetch one PowerStore system using its own management endpoint."""
@@ -371,7 +323,36 @@ async def fetch_cluster_data(
                 else "Metrics API returned no hourly samples"
             )
 
-        capacity = await _fetch_capacity(client, cluster_id=cluster_id, server=server)
+        capacity: dict[str, float] = {}
+        space_samples = await client.generate_metrics(
+            "space_metrics_by_cluster",
+            cluster_id,
+            interval,
+        )
+        if not space_samples and cluster_id != "0":
+            space_samples = await client.generate_metrics(
+                "space_metrics_by_cluster",
+                "0",
+                interval,
+            )
+        if space_samples:
+            latest = space_samples[-1]
+            total = _num(
+                latest.get("last_physical_total"),
+                latest.get("physical_total"),
+                latest.get("max_physical_total"),
+            )
+            used = _num(
+                latest.get("last_physical_used"),
+                latest.get("physical_used"),
+                latest.get("max_physical_used"),
+            )
+            if total is not None and total > 0 and used is not None:
+                capacity = {
+                    "Total_TB": total / TB,
+                    "Free_TB": max(total - used, 0.0) / TB,
+                    "Used_TB": used / TB,
+                }
         return df, capacity, performance_error
     except PowerStoreAuthError as exc:
         return None, {}, str(exc)
@@ -461,7 +442,7 @@ async def fetch_location_data(
         await client.open()
         try:
             await client.login(username, password)
-            df, cap, err = await fetch_cluster_data(client, server=server, interval=interval)
+            df, cap, err = await fetch_cluster_data(client, interval=interval)
         except PowerStoreAuthError as exc:
             df, cap, err = None, {}, str(exc)
         except Exception as exc:

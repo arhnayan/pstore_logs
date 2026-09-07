@@ -879,16 +879,12 @@ class ReportGenerator:
                 perf_stats['_available'] = True
                 for metric in ['Latency', 'Avg. Size', 'Total IOPS', 'CPU Utilization']:
                     if metric in df.columns:
-                        stats = self.calculate_statistics(df, metric)
-                        if stats and 'mean' in stats and stats['mean'] > 0:
-                            perf_stats[metric] = stats
-                        else:
-                            values = df[metric].dropna()
-                            if not values.empty:
-                                perf_stats[metric] = {
-                                    'mean': values.mean(),
-                                    'max': values.max(),
-                                }
+                        values = df[metric].dropna()
+                        if not values.empty:
+                            perf_stats[metric] = {
+                                'mean': values.mean(),
+                                'max': values.max(),
+                            }
 
             capacity_data = self._capacity_data.get(server.upper(), self._capacity_data.get(server, {}))
             current_row = self.create_server_section(ws, server, capacity_data, perf_stats, current_row)
