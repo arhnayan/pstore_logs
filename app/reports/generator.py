@@ -444,13 +444,16 @@ class ReportGenerator:
         cpu_avg = perf_stats.get('CPU Utilization', {}).get('mean', None)
         
         # Write performance data
-        if latency_avg is not None and latency_avg > 0:
+        if not perf_stats.get('_available', False):
+            for column in range(4, 8):
+                ws.cell(row=current_row, column=column).value = "N/A"
+        if latency_avg is not None:
             ws.cell(row=current_row, column=4).value = f"{latency_avg:.2f}"
-        if io_size_avg is not None and io_size_avg > 0:
+        if io_size_avg is not None:
             ws.cell(row=current_row, column=5).value = f"{io_size_avg:.0f}"
-        if iops_avg is not None and iops_avg > 0:
+        if iops_avg is not None:
             ws.cell(row=current_row, column=6).value = f"{iops_avg:.0f}"
-        if cpu_avg is not None and cpu_avg > 0:
+        if cpu_avg is not None:
             ws.cell(row=current_row, column=7).value = f"{cpu_avg:.1f}%"
         
         # Add conditional formatting for performance warnings
@@ -858,7 +861,7 @@ class ReportGenerator:
         # Process each server
         for server in servers:
             df = None
-            perf_stats = {}
+            perf_stats = {'_available': False}
 
             if server in self._server_data:
                 df = self._server_data[server]
@@ -873,11 +876,19 @@ class ReportGenerator:
 
             all_server_data[server] = df
             if df is not None and not df.empty:
+                perf_stats['_available'] = True
                 for metric in ['Latency', 'Avg. Size', 'Total IOPS', 'CPU Utilization']:
                     if metric in df.columns:
                         stats = self.calculate_statistics(df, metric)
                         if stats and 'mean' in stats and stats['mean'] > 0:
                             perf_stats[metric] = stats
+                        else:
+                            values = df[metric].dropna()
+                            if not values.empty:
+                                perf_stats[metric] = {
+                                    'mean': values.mean(),
+                                    'max': values.max(),
+                                }
 
             capacity_data = self._capacity_data.get(server.upper(), self._capacity_data.get(server, {}))
             current_row = self.create_server_section(ws, server, capacity_data, perf_stats, current_row)
