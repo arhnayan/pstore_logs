@@ -294,12 +294,14 @@
       <div class="page-header"><h2>Storage Reports</h2></div>
       <div class="panel">
         <div class="panel-header">
-          <h3>All Locations Storage Report</h3>
+          <h3>All Locations Storage Reports</h3>
           <div style="display:flex;gap:0.5rem;">
             <button type="button" id="save-locations">Save Locations</button>
-            <button type="button" id="generate-report">Generate Report</button>
+            <button type="button" id="generate-report">Generate Summary Report</button>
+            <button type="button" id="generate-hourly-report">Generate Hourly TMP Report</button>
           </div>
         </div>
+        <p class="page-subtitle">Summary report: capacity + averaged performance per server. Hourly TMP report: full hourly rows per server in <code>All_TMPs.xlsx</code> format.</p>
         <p id="reports-creds-warning" class="empty" style="display:none;">Save PowerStore credentials in Settings before generating.</p>
         <p id="report-progress"></p>
         <p id="report-error" style="color:var(--danger,#c0392b);"></p>
