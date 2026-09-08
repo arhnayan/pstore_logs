@@ -14,6 +14,8 @@ from app.db import Database, utc_now
 from app.locations import location_has_ips, location_servers
 from app.monitor_target import location_management_ip
 from app.reports.generator import ReportGenerator
+from app.reports.hourly_generator import HourlyReportGenerator
+from app.paths import static_dir
 
 logger = logging.getLogger(__name__)
 
@@ -473,17 +475,14 @@ class ReportCollector:
     def __init__(self, db: Database) -> None:
         self.db = db
 
-    async def generate_combined_report(
+    async def _fetch_enabled_locations(
         self,
         locations: list[dict[str, Any]],
         username: str,
         password: str,
         *,
-        days: int = 30,
         on_progress: ProgressFn | None = None,
-    ) -> dict[str, Any]:
-        if days != 30:
-            raise ValueError("PowerStore reports support exactly the latest 30 days")
+    ) -> tuple[dict[str, pd.DataFrame], dict[str, dict[str, float]], dict[str, list[str]], list[dict[str, Any]]]:
         enabled = [loc for loc in locations if loc.get("enabled", True) and location_has_ips(loc)]
         if not enabled:
             raise ValueError("No enabled locations with server MGMT IPs configured")
@@ -524,6 +523,27 @@ class ReportCollector:
             )
             raise ValueError(hint)
 
+        return all_server_data, all_capacity, loc_map, enabled
+
+    async def generate_combined_report(
+        self,
+        locations: list[dict[str, Any]],
+        username: str,
+        password: str,
+        *,
+        days: int = 30,
+        on_progress: ProgressFn | None = None,
+    ) -> dict[str, Any]:
+        if days != 30:
+            raise ValueError("PowerStore reports support exactly the latest 30 days")
+
+        all_server_data, all_capacity, loc_map, enabled = await self._fetch_enabled_locations(
+            locations,
+            username,
+            password,
+            on_progress=on_progress,
+        )
+
         if on_progress:
             on_progress("", {"phase": "generating"})
 
@@ -542,6 +562,46 @@ class ReportCollector:
         return {
             "output_file": output_file,
             "filename": "All_Locations_Storage_Report.xlsx",
+            "report_type": "summary",
+            "locations": len(enabled),
+            "servers_with_data": len(all_server_data),
+            "range_days": days,
+            "used_csv_fallback": False,
+        }
+
+    async def generate_hourly_tmp_report(
+        self,
+        locations: list[dict[str, Any]],
+        username: str,
+        password: str,
+        *,
+        days: int = 30,
+        on_progress: ProgressFn | None = None,
+    ) -> dict[str, Any]:
+        if days != 30:
+            raise ValueError("PowerStore reports support exactly the latest 30 days")
+
+        all_server_data, _, loc_map, enabled = await self._fetch_enabled_locations(
+            locations,
+            username,
+            password,
+            on_progress=on_progress,
+        )
+
+        if on_progress:
+            on_progress("", {"phase": "generating_hourly"})
+
+        generator = HourlyReportGenerator(
+            output_dir=str(settings.reports_dir),
+            location_servers=loc_map,
+            server_data=all_server_data,
+            static_dir=static_dir(),
+        )
+        output_file = generator.generate()
+        return {
+            "output_file": output_file,
+            "filename": "All_TMPs.xlsx",
+            "report_type": "hourly",
             "locations": len(enabled),
             "servers_with_data": len(all_server_data),
             "range_days": days,

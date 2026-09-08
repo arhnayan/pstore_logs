@@ -1191,7 +1191,9 @@ function renderReportStatus() {
     }
   }
   const btn = $('#generate-report');
+  const hourlyBtn = $('#generate-hourly-report');
   if (btn) btn.disabled = !!status.running;
+  if (hourlyBtn) hourlyBtn.disabled = !!status.running;
   if (status.running && !state.reportPollTimer) {
     state.reportPollTimer = setInterval(async () => {
       try {
@@ -1229,13 +1231,15 @@ async function saveReportLocations() {
   await loadReportLocations();
 }
 
-async function generateReport() {
-  const btn = $('#generate-report');
+async function generateReport(endpoint, label) {
+  const btn = endpoint === '/api/reports/generate-hourly'
+    ? $('#generate-hourly-report')
+    : $('#generate-report');
   if (btn) btn.disabled = true;
   try {
     await saveReportLocations();
-    await api('/api/reports/generate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
-    toast('Report generation started');
+    await api(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+    toast(`${label} started`);
     await loadReportStatus();
   } catch (e) {
     toast('Failed: ' + e.message);
@@ -1248,7 +1252,10 @@ function setupReports() {
     try { await saveReportLocations(); } catch (e) { toast('Save failed: ' + e.message); }
   });
   $('#generate-report')?.addEventListener('click', async () => {
-    try { await generateReport(); } catch (e) { toast('Failed: ' + e.message); }
+    try { await generateReport('/api/reports/generate', 'Summary report generation'); } catch (e) { toast('Failed: ' + e.message); }
+  });
+  $('#generate-hourly-report')?.addEventListener('click', async () => {
+    try { await generateReport('/api/reports/generate-hourly', 'Hourly TMP report generation'); } catch (e) { toast('Failed: ' + e.message); }
   });
 }
 

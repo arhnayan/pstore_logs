@@ -52,11 +52,14 @@ python3 pstore_checks.py --type hardware --json
 - **Log bundles** — trigger, poll, download to `~/Downloads`
 - **macOS notifications** for new Critical alerts (deduplicated)
 - **Pin volume** — enable fast 5s metrics for a single volume via the UI
-- **Reports** — generate `All_Locations_Storage_Report.xlsx` across all Vodafone PowerStore sites
+- **Reports** — generate `All_Locations_Storage_Report.xlsx` (summary) or `All_TMPs.xlsx` (hourly TMP sheets) across all Vodafone PowerStore sites
 
 ## Reports
 
-Go to **Reports** in the sidebar. Six Vodafone locations are pre-seeded with **per-server MGMT IPs** from `VODAFONE NETWORK IP.xlsx`. Save credentials in **Settings**, then click **Generate Report**. The app connects to each server's MGMT IP, pulls hourly host metrics, and writes a styled combined Excel workbook to your app data `reports/` folder.
+Go to **Reports** in the sidebar. Six Vodafone locations are pre-seeded with **per-server MGMT IPs** from `VODAFONE NETWORK IP.xlsx`. Save credentials in **Settings**, then click **Generate Summary Report** or **Generate Hourly TMP Report**. The app connects to each server's MGMT IP, pulls hourly host metrics, and writes the Excel workbook to your app data `reports/` folder.
+
+- **Summary report** (`All_Locations_Storage_Report.xlsx`): one sheet per location with capacity and averaged performance.
+- **Hourly TMP report** (`All_TMPs.xlsx`): one sheet per server with hourly rows (Latency, I/O size, IOPS, CPU) matching the legacy `All_TMPs.xlsx` layout.
 
 ## Data storage
 
