@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import date
 from typing import Any, Callable
 
 import pandas as pd
@@ -13,6 +14,7 @@ from app.config import settings
 from app.db import Database, utc_now
 from app.locations import location_has_ips, location_servers
 from app.monitor_target import location_management_ip
+from app.reports.custom_generator import CustomReportGenerator
 from app.reports.generator import ReportGenerator
 from app.reports.hourly_generator import HourlyReportGenerator
 from app.reports.overprovision_generator import OverprovisionReportGenerator
@@ -57,6 +59,30 @@ def _format_timestamp(value: Any) -> str:
     if "." in text:
         text = text.split(".", 1)[0]
     return text.strip()
+
+
+def _bytes_to_mib(value: Any) -> float | None:
+    number = _num(value)
+    return number / (1024.0 * 1024.0) if number is not None else None
+
+
+def _cpu_avg_value(sample: dict[str, Any]) -> float | None:
+    value = _num(
+        sample.get("avg_io_workload_cpu_utilization"),
+        sample.get("io_workload_cpu_utilization"),
+        sample.get("avg_cpu_utilization"),
+        sample.get("cpu_utilization"),
+    )
+    if value is None:
+        return None
+    return value * 100.0 if 0 <= value <= 1 else value
+
+
+def _cpu_max_value(sample: dict[str, Any]) -> float | None:
+    value = _num(sample.get("max_io_workload_cpu_utilization"), sample.get("max_cpu_utilization"))
+    if value is None:
+        return None
+    return value * 100.0 if 0 <= value <= 1 else value
 
 
 def _cpu_value(sample: dict[str, Any]) -> float | None:
@@ -111,23 +137,57 @@ def _aggregate_appliance_samples(sample_groups: list[list[dict[str, Any]]]) -> l
             return sum(value * weight for value, weight in pairs) / weight_sum
         return sum(unweighted) / len(unweighted) if unweighted else None
 
+    def peak(rows: list[dict[str, Any]], *keys: str) -> float | None:
+        values = [_num(*(row.get(key) for key in keys)) for row in rows]
+        present = [value for value in values if value is not None]
+        return max(present) if present else None
+
     combined: list[dict[str, Any]] = []
     for timestamp, rows in sorted(by_timestamp.items()):
         cpu_values = [value for row in rows if (value := _cpu_value(row)) is not None]
+        avg_cpu_values = [value for row in rows if (value := _cpu_avg_value(row)) is not None]
+        max_cpu_values = [value for row in rows if (value := _cpu_max_value(row)) is not None]
         combined.append(
             {
                 "timestamp": timestamp,
                 "avg_latency": weighted(rows, "avg_latency", ("avg_total_iops", "total_iops")),
                 "avg_read_latency": weighted(rows, "avg_read_latency", ("avg_read_iops", "read_iops")),
                 "avg_write_latency": weighted(rows, "avg_write_latency", ("avg_write_iops", "write_iops")),
+                "max_latency": peak(rows, "max_latency"),
+                "max_read_latency": peak(rows, "max_read_latency"),
+                "max_write_latency": peak(rows, "max_write_latency"),
                 "avg_io_size": weighted(rows, "avg_io_size", ("avg_total_iops", "total_iops")),
                 "avg_read_size": weighted(rows, "avg_read_size", ("avg_read_iops", "read_iops")),
                 "avg_write_size": weighted(rows, "avg_write_size", ("avg_write_iops", "write_iops")),
                 "avg_total_iops": total(rows, "avg_total_iops", "total_iops"),
                 "avg_read_iops": total(rows, "avg_read_iops", "read_iops"),
                 "avg_write_iops": total(rows, "avg_write_iops", "write_iops"),
+                "max_total_iops": total(rows, "max_total_iops"),
+                "max_read_iops": total(rows, "max_read_iops"),
+                "max_write_iops": total(rows, "max_write_iops"),
+                "avg_normalized_iops": total(rows, "avg_normalized_iops", "normalized_iops"),
+                "avg_bandwidth": total(rows, "avg_bandwidth", "bandwidth"),
+                "avg_read_bandwidth": total(rows, "avg_read_bandwidth", "read_bandwidth"),
+                "avg_write_bandwidth": total(rows, "avg_write_bandwidth", "write_bandwidth"),
+                "max_bandwidth": total(rows, "max_bandwidth"),
+                "max_read_bandwidth": total(rows, "max_read_bandwidth"),
+                "max_write_bandwidth": total(rows, "max_write_bandwidth"),
+                "avg_unaligned_io_count": total(
+                    rows, "avg_unaligned_io_count", "unaligned_io_count", "unaligned_ios"
+                ),
+                "avg_unaligned_read_count": total(
+                    rows, "avg_unaligned_read_count", "unaligned_read_count"
+                ),
+                "avg_unaligned_write_count": total(
+                    rows, "avg_unaligned_write_count", "unaligned_write_count"
+                ),
                 "avg_io_workload_cpu_utilization": (
-                    sum(cpu_values) / len(cpu_values) if cpu_values else None
+                    sum(avg_cpu_values) / len(avg_cpu_values) if avg_cpu_values else (
+                        sum(cpu_values) / len(cpu_values) if cpu_values else None
+                    )
+                ),
+                "max_io_workload_cpu_utilization": (
+                    max(max_cpu_values) if max_cpu_values else None
                 ),
             }
         )
@@ -205,13 +265,47 @@ def samples_to_dataframe(samples: list[dict[str, Any]]) -> pd.DataFrame | None:
                 "Latency": _us_to_ms(sample.get("avg_latency")),
                 "Read Latency": _us_to_ms(sample.get("avg_read_latency")),
                 "Write Latency": _us_to_ms(sample.get("avg_write_latency")),
+                "Max Latency": _us_to_ms(sample.get("max_latency")),
+                "Max Read Latency": _us_to_ms(sample.get("max_read_latency")),
+                "Max Write Latency": _us_to_ms(sample.get("max_write_latency")),
                 "Avg. Size": _bytes_to_kib(sample.get("avg_io_size")),
                 "Read Size": _bytes_to_kib(sample.get("avg_read_size")),
                 "Write Size": _bytes_to_kib(sample.get("avg_write_size")),
                 "Total IOPS": _num(sample.get("avg_total_iops"), sample.get("total_iops")),
                 "Read IOPS": _num(sample.get("avg_read_iops"), sample.get("read_iops")),
                 "Write IOPS": _num(sample.get("avg_write_iops"), sample.get("write_iops")),
+                "Max Total IOPS": _num(sample.get("max_total_iops")),
+                "Max Read IOPS": _num(sample.get("max_read_iops")),
+                "Max Write IOPS": _num(sample.get("max_write_iops")),
+                "Normalized IOPS": _num(sample.get("avg_normalized_iops"), sample.get("normalized_iops")),
                 "CPU Utilization": _cpu_value(sample),
+                "Avg CPU Utilization": _cpu_avg_value(sample),
+                "Max CPU Utilization": _cpu_max_value(sample),
+                "Total Bandwidth": _bytes_to_mib(
+                    _num(sample.get("avg_bandwidth"), sample.get("bandwidth"))
+                ),
+                "Read Bandwidth": _bytes_to_mib(
+                    _num(sample.get("avg_read_bandwidth"), sample.get("read_bandwidth"))
+                ),
+                "Write Bandwidth": _bytes_to_mib(
+                    _num(sample.get("avg_write_bandwidth"), sample.get("write_bandwidth"))
+                ),
+                "Max Total Bandwidth": _bytes_to_mib(sample.get("max_bandwidth")),
+                "Max Read Bandwidth": _bytes_to_mib(sample.get("max_read_bandwidth")),
+                "Max Write Bandwidth": _bytes_to_mib(sample.get("max_write_bandwidth")),
+                "Unaligned I/O": _num(
+                    sample.get("avg_unaligned_io_count"),
+                    sample.get("unaligned_io_count"),
+                    sample.get("unaligned_ios"),
+                ),
+                "Unaligned Read I/O": _num(
+                    sample.get("avg_unaligned_read_count"),
+                    sample.get("unaligned_read_count"),
+                ),
+                "Unaligned Write I/O": _num(
+                    sample.get("avg_unaligned_write_count"),
+                    sample.get("unaligned_write_count"),
+                ),
             }
         )
     df = pd.DataFrame(rows)
@@ -223,6 +317,26 @@ def samples_to_dataframe(samples: list[dict[str, Any]]) -> pd.DataFrame | None:
         return None
     df = df[df["Timestamp"].astype(str).str.strip() != ""]
     return df.reset_index(drop=True) if not df.empty else None
+
+
+def filter_dataframe_by_dates(
+    df: pd.DataFrame,
+    start: date,
+    end: date,
+) -> pd.DataFrame | None:
+    """Keep hourly rows whose calendar date is between start and end, inclusive."""
+    if df is None or df.empty:
+        return None
+    column = "Timestamp" if "Timestamp" in df.columns else "DateTime"
+    if column not in df.columns:
+        return df
+    timestamps = pd.to_datetime(df[column], errors="coerce")
+    start_ts = pd.Timestamp(start)
+    end_ts = pd.Timestamp(end) + pd.Timedelta(days=1) - pd.Timedelta(nanoseconds=1)
+    filtered = df.loc[timestamps.notna() & (timestamps >= start_ts) & (timestamps <= end_ts)].copy()
+    if filtered.empty:
+        return None
+    return filtered.reset_index(drop=True)
 
 
 async def _compute_host_capacity(
@@ -380,6 +494,18 @@ def _parse_cluster_space(latest: dict[str, Any]) -> dict[str, float]:
         latest.get("physical_total"),
         latest.get("max_physical_total"),
     )
+    physical_used = _num(
+        latest.get("last_physical_used"),
+        latest.get("physical_used"),
+        latest.get("max_physical_used"),
+    )
+    physical_free = _num(
+        latest.get("last_physical_free"),
+        latest.get("physical_free"),
+        latest.get("max_physical_free"),
+    )
+    if physical_free is None and physical_total is not None and physical_used is not None:
+        physical_free = max(physical_total - physical_used, 0.0)
     logical_provisioned = _num(
         latest.get("last_logical_provisioned"),
         latest.get("logical_provisioned"),
@@ -402,10 +528,16 @@ def _parse_cluster_space(latest: dict[str, Any]) -> dict[str, float]:
     )
     parsed: dict[str, float] = {}
     physical_tb = _bytes_to_tb(physical_total)
+    physical_used_tb = _bytes_to_tb(physical_used)
+    physical_free_tb = _bytes_to_tb(physical_free)
     provisioned_tb = _bytes_to_tb(logical_provisioned)
     used_tb = _bytes_to_tb(logical_used)
     if physical_tb is not None:
         parsed["Physical_Total_TB"] = physical_tb
+    if physical_used_tb is not None:
+        parsed["Physical_Used_TB"] = physical_used_tb
+    if physical_free_tb is not None:
+        parsed["Physical_Free_TB"] = physical_free_tb
     if provisioned_tb is not None:
         parsed["Logical_Provisioned_TB"] = provisioned_tb
     if used_tb is not None:
@@ -698,6 +830,8 @@ class ReportCollector:
         password: str,
         *,
         on_progress: ProgressFn | None = None,
+        start_date: date | None = None,
+        end_date: date | None = None,
     ) -> tuple[dict[str, pd.DataFrame], dict[str, dict[str, float]], dict[str, list[str]], list[dict[str, Any]]]:
         enabled = [loc for loc in locations if loc.get("enabled", True) and location_has_ips(loc)]
         if not enabled:
@@ -731,11 +865,26 @@ class ReportCollector:
 
         await asyncio.gather(*(fetch_one(loc) for loc in enabled))
 
+        if start_date is not None and end_date is not None:
+            filtered: dict[str, pd.DataFrame] = {}
+            for server, df in all_server_data.items():
+                kept = filter_dataframe_by_dates(df, start_date, end_date)
+                if kept is not None:
+                    filtered[server] = kept
+            all_server_data = filtered
+
         if not all_server_data:
             hint = (
-                "No performance data retrieved from any location. "
+                "No performance data retrieved from any location"
+                + (
+                    f" for {start_date.isoformat()} through {end_date.isoformat()}"
+                    if start_date and end_date
+                    else ""
+                )
+                + ". "
                 "Common causes: metrics API denied (403 — need Administrator/Performance Monitor role), "
-                "invalid credentials, or network cannot reach the configured server management IPs."
+                "invalid credentials, network cannot reach the configured server management IPs, "
+                "or the selected dates are outside PowerStore's hourly retention (~30 days)."
             )
             raise ValueError(hint)
 
@@ -887,5 +1036,54 @@ class ReportCollector:
             "report_type": "overprovision",
             "locations": len(enabled),
             "servers_with_data": len(all_server_space),
+            "used_csv_fallback": False,
+        }
+
+    async def generate_custom_report(
+        self,
+        locations: list[dict[str, Any]],
+        username: str,
+        password: str,
+        *,
+        sections: list[str],
+        metrics: list[str],
+        columns: dict[str, list[str]] | None = None,
+        psk_columns: list[str] | None = None,
+        start_date: date,
+        end_date: date,
+        on_progress: ProgressFn | None = None,
+    ) -> dict[str, Any]:
+        all_server_data, _, loc_map, enabled = await self._fetch_enabled_locations(
+            locations,
+            username,
+            password,
+            on_progress=on_progress,
+            start_date=start_date,
+            end_date=end_date,
+        )
+
+        if on_progress:
+            on_progress("", {"phase": "generating_custom"})
+
+        generator = CustomReportGenerator(
+            output_dir=str(settings.reports_dir),
+            location_servers=loc_map,
+            server_data=all_server_data,
+            sections=sections,
+            metrics=metrics,
+            columns=columns,
+            psk_columns=psk_columns,
+            static_dir=static_dir(),
+        )
+        result = generator.generate()
+        return {
+            "output_file": result["output_file"],
+            "filename": result["filename"],
+            "report_type": "custom",
+            "locations": len(enabled),
+            "servers_with_data": len(all_server_data),
+            "files": result.get("files") or [result["filename"]],
+            "start_date": start_date.isoformat(),
+            "end_date": end_date.isoformat(),
             "used_csv_fallback": False,
         }

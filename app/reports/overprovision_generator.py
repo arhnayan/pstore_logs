@@ -12,12 +12,15 @@ from openpyxl.utils import get_column_letter
 
 SUMMARY_HEADERS = [
     "Physical Total (TB)",
+    "Physical Used (TB)",
+    "Physical Free (TB)",
     "Logical Provisioned (TB)",
     "Logical Used (TB)",
     "Overprovisioning %",
     "Efficiency Ratio",
     "Thin Savings",
 ]
+SUMMARY_COLS = len(SUMMARY_HEADERS)
 
 VOLUME_HEADERS = [
     "Server",
@@ -108,10 +111,10 @@ class OverprovisionReportGenerator:
         servers: list[str],
     ) -> None:
         ws = wb.create_sheet(title=self._unique_sheet_name(f"{location} Report"))
-        for col in range(1, 7):
+        for col in range(1, SUMMARY_COLS + 1):
             ws.column_dimensions[get_column_letter(col)].width = 22
 
-        ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=6)
+        ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=SUMMARY_COLS)
         header = ws.cell(row=1, column=1)
         header.value = f"{location} Site  {', '.join(servers)}"
         header.fill = self.RED_FILL
@@ -124,7 +127,7 @@ class OverprovisionReportGenerator:
 
     def _create_server_section(self, ws, server_name: str, start_row: int) -> int:
         current_row = start_row
-        ws.merge_cells(start_row=current_row, start_column=1, end_row=current_row, end_column=6)
+        ws.merge_cells(start_row=current_row, start_column=1, end_row=current_row, end_column=SUMMARY_COLS)
         name_cell = ws.cell(row=current_row, column=1)
         name_cell.value = server_name
         name_cell.fill = self.BLACK_FILL
@@ -132,7 +135,7 @@ class OverprovisionReportGenerator:
         name_cell.alignment = Alignment(horizontal="center", vertical="center")
         current_row += 1
 
-        ws.merge_cells(start_row=current_row, start_column=1, end_row=current_row, end_column=6)
+        ws.merge_cells(start_row=current_row, start_column=1, end_row=current_row, end_column=SUMMARY_COLS)
         sub = ws.cell(row=current_row, column=1)
         sub.value = "OVERPROVISIONING"
         self._style_header_cell(sub, self.GREY_FILL)
@@ -142,26 +145,27 @@ class OverprovisionReportGenerator:
         current_row += 1
 
         space = self.server_space.get(server_name) or self.server_space.get(server_name.upper(), {})
-        physical = space.get("Physical_Total_TB")
-        provisioned = space.get("Logical_Provisioned_TB")
-        used = space.get("Logical_Used_TB")
         over_pct = space.get("Overprovisioning_Pct")
         values = [
-            physical,
-            provisioned,
-            used,
+            space.get("Physical_Total_TB"),
+            space.get("Physical_Used_TB"),
+            space.get("Physical_Free_TB"),
+            space.get("Logical_Provisioned_TB"),
+            space.get("Logical_Used_TB"),
             over_pct,
             self._format_ratio(space.get("Efficiency_Ratio")),
             self._format_ratio(space.get("Thin_Savings")),
         ]
+        tb_cols = {1, 2, 3, 4, 5}
+        over_col = 6
         for col_idx, value in enumerate(values, 1):
             cell = ws.cell(row=current_row, column=col_idx)
             cell.value = value
             cell.border = self.BORDER
             cell.alignment = Alignment(horizontal="center", vertical="center")
-            if col_idx <= 3 and isinstance(value, (int, float)):
+            if col_idx in tb_cols and isinstance(value, (int, float)):
                 cell.number_format = "0.00"
-            if col_idx == 4 and isinstance(value, (int, float)):
+            if col_idx == over_col and isinstance(value, (int, float)):
                 cell.number_format = "0.0"
                 self._apply_overprovision_fill(cell, float(value))
         return current_row + 2
