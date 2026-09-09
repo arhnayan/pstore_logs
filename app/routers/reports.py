@@ -33,6 +33,7 @@ _job_state: dict = {
 ALLOWED_REPORT_FILES = {
     "All_Locations_Storage_Report.xlsx",
     "All_TMPs.xlsx",
+    "All_Locations_Overprovisioning_Report.xlsx",
 }
 
 
@@ -96,6 +97,8 @@ async def _schedule_report_job(report_type: str, runner) -> dict:
                 _job_state["progress"] = "Generating summary Excel report…"
             elif phase == "generating_hourly":
                 _job_state["progress"] = "Generating hourly TMP Excel report…"
+            elif phase == "generating_overprovision":
+                _job_state["progress"] = "Generating overprovisioning Excel report…"
             asyncio.create_task(event_bus.publish("report", dict(_job_state)))
 
         try:
@@ -195,6 +198,32 @@ async def generate_hourly_report(payload: GeneratePayload | None = None) -> dict
         )
 
     return await _schedule_report_job("hourly", runner)
+
+
+@router.post("/generate-overprovision")
+async def generate_overprovision_report() -> dict:
+    if not await has_credentials():
+        raise HTTPException(status_code=400, detail="Configure credentials in Settings first")
+
+    creds = await get_credentials()
+    if not creds:
+        raise HTTPException(status_code=400, detail="Configure credentials in Settings first")
+    username, password = creds
+
+    locations = await ensure_locations(db)
+    enabled = [loc for loc in locations if loc.get("enabled", True)]
+    if not any(location_has_ips(loc) for loc in enabled):
+        raise HTTPException(status_code=400, detail="No locations have server MGMT IPs configured")
+
+    async def runner(collector: ReportCollector, on_progress) -> dict:
+        return await collector.generate_overprovision_report(
+            locations,
+            username,
+            password,
+            on_progress=on_progress,
+        )
+
+    return await _schedule_report_job("overprovision", runner)
 
 
 @router.get("/download/{filename}")
