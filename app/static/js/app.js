@@ -9,6 +9,7 @@ const state = {
   charts: {}, volumeNames: {}, hostNames: {}, portNames: {},
   pinnedVolumeId: null, collectionPollTimer: null,
   reportLocations: [], reportStatus: null, reportPollTimer: null,
+  customReportOptions: null,
 };
 
 function $(sel) { return document.querySelector(sel); }
@@ -1193,9 +1194,11 @@ function renderReportStatus() {
   const btn = $('#generate-report');
   const hourlyBtn = $('#generate-hourly-report');
   const overprovisionBtn = $('#generate-overprovision-report');
+  const customBtn = $('#generate-custom-report');
   if (btn) btn.disabled = !!status.running;
   if (hourlyBtn) hourlyBtn.disabled = !!status.running;
   if (overprovisionBtn) overprovisionBtn.disabled = !!status.running;
+  if (customBtn) customBtn.disabled = !!status.running;
   if (status.running && !state.reportPollTimer) {
     state.reportPollTimer = setInterval(async () => {
       try {
@@ -1233,21 +1236,199 @@ async function saveReportLocations() {
   await loadReportLocations();
 }
 
-async function generateReport(endpoint, label) {
+async function generateReport(endpoint, label, body = {}) {
   const btnMap = {
     '/api/reports/generate-hourly': '#generate-hourly-report',
     '/api/reports/generate-overprovision': '#generate-overprovision-report',
+    '/api/reports/generate-custom': '#generate-custom-report',
   };
   const btn = $(btnMap[endpoint] || '#generate-report');
   if (btn) btn.disabled = true;
   try {
     await saveReportLocations();
-    await api(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+    await api(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
     toast(`${label} started`);
     await loadReportStatus();
   } catch (e) {
     toast('Failed: ' + e.message);
     if (btn) btn.disabled = false;
+  }
+}
+
+function checkboxItem(id, name, value, label, hint, checked, extra = '') {
+  return `<label class="check-item">
+    <input type="checkbox" id="${id}" name="${name}" value="${value}" ${checked ? 'checked' : ''} ${extra}>
+    <span>${label}${hint ? `<span class="hint">${hint}</span>` : ''}</span>
+  </label>`;
+}
+
+function selectedValues(selector) {
+  return [...$$(selector)].filter(el => el.checked).map(el => el.value);
+}
+
+function isoDate(d) {
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function renderCustomReportBuilder() {
+  const options = state.customReportOptions;
+  if (!options) return;
+
+  const presetEl = $('#custom-date-presets');
+  if (presetEl) {
+    presetEl.innerHTML = (options.date_presets || []).map(preset => `
+      <label class="check-item">
+        <input type="radio" name="custom-date-preset" value="${preset.id}" ${preset.id === '30d' ? 'checked' : ''}>
+        <span>${preset.label}</span>
+      </label>
+    `).join('');
+  }
+
+  const sectionEl = $('#custom-sections');
+  if (sectionEl) {
+    sectionEl.innerHTML = (options.sections || []).map(section =>
+      checkboxItem(
+        `custom-section-${section.id}`,
+        'custom-section',
+        section.id,
+        section.label,
+        section.description,
+        !!section.default,
+      )
+    ).join('');
+  }
+
+  const metricEl = $('#custom-metrics');
+  if (metricEl) {
+    metricEl.innerHTML = (options.metrics || []).map(metric =>
+      checkboxItem(
+        `custom-metric-${metric.id}`,
+        'custom-metric',
+        metric.id,
+        metric.label,
+        '',
+        !!metric.default,
+      )
+    ).join('');
+  }
+
+  const columnsEl = $('#custom-columns');
+  if (columnsEl) {
+    const pskGroup = `
+      <div class="column-group" data-column-group="psk">
+        <h4>PSK</h4>
+        ${(options.psk_columns || []).map(col =>
+          checkboxItem(
+            `custom-psk-col-${col.id}`,
+            'custom-psk-column',
+            col.id,
+            col.label,
+            '',
+            true,
+            col.required ? 'disabled data-required="1"' : '',
+          )
+        ).join('')}
+      </div>
+    `;
+    const metricGroups = (options.metrics || []).map(metric => `
+      <div class="column-group" data-column-group="${metric.id}">
+        <h4>${metric.label}</h4>
+        ${(metric.columns || []).map(col =>
+          checkboxItem(
+            `custom-col-${metric.id}-${col.id.replace(/[^A-Za-z0-9_-]/g, '_')}`,
+            `custom-column-${metric.id}`,
+            col.id,
+            col.label,
+            '',
+            true,
+            col.required ? 'disabled data-required="1"' : '',
+          )
+        ).join('')}
+      </div>
+    `).join('');
+    columnsEl.innerHTML = `<div class="column-groups">${pskGroup}${metricGroups}</div>`;
+  }
+
+  const start = $('#custom-start-date');
+  const end = $('#custom-end-date');
+  if (start && !start.value) {
+    const now = new Date();
+    start.value = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
+  }
+  if (end && !end.value) end.value = isoDate(new Date());
+
+  syncCustomReportUi();
+}
+
+function selectedDatePreset() {
+  return $('input[name="custom-date-preset"]:checked')?.value || '30d';
+}
+
+function syncCustomReportUi() {
+  const range = $('#custom-date-range');
+  if (range) range.hidden = selectedDatePreset() !== 'custom';
+
+  const pskOn = $('#custom-section-psk')?.checked;
+  const pskGroup = document.querySelector('[data-column-group="psk"]');
+  if (pskGroup) pskGroup.classList.toggle('disabled', !pskOn);
+
+  (state.customReportOptions?.metrics || []).forEach(metric => {
+    const metricOn = $(`#custom-metric-${metric.id}`)?.checked;
+    const group = document.querySelector(`[data-column-group="${metric.id}"]`);
+    if (group) group.classList.toggle('disabled', !metricOn);
+  });
+}
+
+function collectCustomReportPayload() {
+  const sections = selectedValues('input[name="custom-section"]');
+  const metrics = selectedValues('input[name="custom-metric"]');
+  const columns = {};
+  (state.customReportOptions?.metrics || []).forEach(metric => {
+    if (!metrics.includes(metric.id)) return;
+    const selected = selectedValues(`input[name="custom-column-${metric.id}"]`);
+    const required = (metric.columns || []).filter(col => col.required).map(col => col.id);
+    columns[metric.id] = [...new Set([...required, ...selected])];
+  });
+  const pskColumns = selectedValues('input[name="custom-psk-column"]');
+  if (!pskColumns.includes('DateTime')) pskColumns.unshift('DateTime');
+  if (!sections.length) throw new Error('Select at least one report section');
+  if (sections.includes('metric_sheets') && !metrics.length) {
+    throw new Error('Select at least one metric for per-server metric sheets');
+  }
+  const payload = {
+    sections,
+    metrics,
+    columns,
+    psk_columns: pskColumns,
+    date_preset: selectedDatePreset(),
+  };
+  if (payload.date_preset === 'custom') {
+    payload.start_date = $('#custom-start-date')?.value || null;
+    payload.end_date = $('#custom-end-date')?.value || null;
+    if (!payload.start_date || !payload.end_date) {
+      throw new Error('Specified range requires both a start date and an end date');
+    }
+    if (payload.end_date < payload.start_date) {
+      throw new Error('End date must be on or after the start date');
+    }
+  }
+  return payload;
+}
+
+async function loadCustomReportOptions() {
+  if (!$('#custom-report-builder')) return;
+  try {
+    state.customReportOptions = await api('/api/reports/custom-options');
+    renderCustomReportBuilder();
+  } catch (e) {
+    toast('Failed to load custom report options: ' + e.message);
   }
 }
 
@@ -1264,6 +1445,14 @@ function setupReports() {
   $('#generate-overprovision-report')?.addEventListener('click', async () => {
     try { await generateReport('/api/reports/generate-overprovision', 'Overprovisioning report generation'); } catch (e) { toast('Failed: ' + e.message); }
   });
+  $('#generate-custom-report')?.addEventListener('click', async () => {
+    try {
+      await generateReport('/api/reports/generate-custom', 'Custom report generation', collectCustomReportPayload());
+    } catch (e) {
+      toast('Failed: ' + e.message);
+    }
+  });
+  $('#custom-report-builder')?.addEventListener('change', syncCustomReportUi);
 }
 
 async function loadClusterSeries() {
@@ -1314,7 +1503,7 @@ function setupNav() {
       $(`#page-${page}`).classList.add('active');
       if (page === 'support') loadCollections();
       if (page === 'settings') loadSettings();
-      if (page === 'reports') { loadReportLocations(); loadReportStatus(); loadSettings(); }
+      if (page === 'reports') { loadReportLocations(); loadReportStatus(); loadSettings(); loadCustomReportOptions(); }
       if (page === 'protection') loadProtection();
       if (page === 'resources') { loadResources().then(() => renderResources()); }
     });

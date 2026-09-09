@@ -535,3 +535,94 @@ tr:hover td { background: var(--bg-hover); }
 .health-legend .leg-degraded::before { background: var(--major); }
 .health-legend .leg-failed::before { background: var(--critical); }
 .health-legend .leg-unknown::before { background: var(--border); }
+
+#custom-report-panel > .page-subtitle {
+  padding: 0.85rem 1.25rem 0;
+}
+
+.custom-report-builder {
+  padding: 1rem 1.25rem 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.custom-fieldset {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.85rem 1rem 1rem;
+  background: var(--bg);
+}
+
+.custom-fieldset legend {
+  padding: 0 0.35rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.legend-note {
+  font-weight: 400;
+  color: var(--text-muted);
+}
+
+.check-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 0.45rem 1rem;
+}
+
+.check-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  font-size: 0.85rem;
+  line-height: 1.35;
+}
+
+.check-item input {
+  margin-top: 0.15rem;
+}
+
+.check-item .hint {
+  display: block;
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+
+.custom-date-range {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem 1.25rem;
+  margin-top: 0.75rem;
+}
+
+.custom-date-range label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.85rem;
+}
+
+.column-groups {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 0.75rem;
+}
+
+.column-group {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.75rem;
+  background: var(--bg-panel);
+}
+
+.column-group h4 {
+  font-size: 0.78rem;
+  font-weight: 600;
+  margin-bottom: 0.55rem;
+}
+
+.column-group.disabled {
+  opacity: 0.45;
+}

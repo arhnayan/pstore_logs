@@ -309,6 +309,36 @@
         <p id="report-download"></p>
         <div id="report-locations-table"></div>
       </div>
+      <div class="panel" id="custom-report-panel">
+        <div class="panel-header">
+          <h3>Custom Report</h3>
+          <button type="button" id="generate-custom-report">Generate Custom Report</button>
+        </div>
+        <p class="page-subtitle">Choose sections, metrics, optional columns, and a date range. Hourly samples cover about the last 30 days; specified ranges include both start and end dates.</p>
+        <div class="custom-report-builder" id="custom-report-builder">
+          <fieldset class="custom-fieldset">
+            <legend>Period</legend>
+            <div class="check-grid" id="custom-date-presets"></div>
+            <div class="custom-date-range" id="custom-date-range" hidden>
+              <label>From <input type="date" id="custom-start-date"></label>
+              <label>To <input type="date" id="custom-end-date"></label>
+            </div>
+          </fieldset>
+          <fieldset class="custom-fieldset">
+            <legend>Sections</legend>
+            <div class="check-grid" id="custom-sections"></div>
+          </fieldset>
+          <fieldset class="custom-fieldset">
+            <legend>Metrics</legend>
+            <div class="check-grid" id="custom-metrics"></div>
+          </fieldset>
+          <fieldset class="custom-fieldset">
+            <legend>Columns <span class="legend-note">(optional)</span></legend>
+            <p class="page-subtitle" style="margin:0 0 0.75rem;">Leave a metric’s columns at the default, or pick a subset. DateTime is always included.</p>
+            <div id="custom-columns"></div>
+          </fieldset>
+        </div>
+      </div>
     </section>
 
     <section id="page-settings" class="page">

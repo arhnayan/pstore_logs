@@ -15,6 +15,14 @@ from app.credentials import get_credentials, has_credentials
 from app.deps import db, event_bus
 from app.locations import ensure_locations, location_has_ips
 from app.report_collector import ReportCollector
+from app.reports.catalog import (
+    catalog_payload,
+    default_metric_ids,
+    default_section_ids,
+    metric_by_id,
+    resolve_date_range,
+    section_ids,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/reports", tags=["reports"])
@@ -34,6 +42,9 @@ ALLOWED_REPORT_FILES = {
     "All_Locations_Storage_Report.xlsx",
     "All_TMPs.xlsx",
     "All_Locations_Overprovisioning_Report.xlsx",
+    "Custom_Storage_Report.xlsx",
+    "Custom_Storage_Report.zip",
+    "Custom_All_TMPs.xlsx",
 }
 
 
@@ -52,6 +63,16 @@ class LocationsPayload(BaseModel):
 
 class GeneratePayload(BaseModel):
     days: int = Field(default=30, ge=30, le=30)
+
+
+class CustomGeneratePayload(BaseModel):
+    sections: list[str] = Field(default_factory=default_section_ids)
+    metrics: list[str] = Field(default_factory=default_metric_ids)
+    columns: dict[str, list[str]] = Field(default_factory=dict)
+    psk_columns: list[str] = Field(default_factory=list)
+    date_preset: str = "30d"
+    start_date: str | None = None
+    end_date: str | None = None
 
 
 def _start_report_job(report_type: str) -> None:
@@ -99,6 +120,8 @@ async def _schedule_report_job(report_type: str, runner) -> dict:
                 _job_state["progress"] = "Generating hourly TMP Excel report…"
             elif phase == "generating_overprovision":
                 _job_state["progress"] = "Generating overprovisioning Excel report…"
+            elif phase == "generating_custom":
+                _job_state["progress"] = "Generating custom Excel report…"
             asyncio.create_task(event_bus.publish("report", dict(_job_state)))
 
         try:
@@ -126,6 +149,26 @@ def _set_job(**kwargs) -> None:
     _job_state.update(kwargs)
 
 
+def _is_allowed_report(filename: str) -> bool:
+    if filename in ALLOWED_REPORT_FILES:
+        return True
+    return filename.startswith("Custom_") and filename.endswith((".xlsx", ".zip"))
+
+
+async def _require_report_inputs() -> tuple[str, str, list[dict]]:
+    if not await has_credentials():
+        raise HTTPException(status_code=400, detail="Configure credentials in Settings first")
+    creds = await get_credentials()
+    if not creds:
+        raise HTTPException(status_code=400, detail="Configure credentials in Settings first")
+    username, password = creds
+    locations = await ensure_locations(db)
+    enabled = [loc for loc in locations if loc.get("enabled", True)]
+    if not any(location_has_ips(loc) for loc in enabled):
+        raise HTTPException(status_code=400, detail="No locations have server MGMT IPs configured")
+    return username, password, locations
+
+
 @router.get("/locations")
 async def list_locations() -> dict:
     locations = await ensure_locations(db)
@@ -142,6 +185,11 @@ async def update_locations(payload: LocationsPayload) -> dict:
 @router.get("/status")
 async def report_status() -> dict:
     return dict(_job_state)
+
+
+@router.get("/custom-options")
+async def custom_report_options() -> dict:
+    return catalog_payload()
 
 
 @router.post("/generate")
@@ -202,18 +250,7 @@ async def generate_hourly_report(payload: GeneratePayload | None = None) -> dict
 
 @router.post("/generate-overprovision")
 async def generate_overprovision_report() -> dict:
-    if not await has_credentials():
-        raise HTTPException(status_code=400, detail="Configure credentials in Settings first")
-
-    creds = await get_credentials()
-    if not creds:
-        raise HTTPException(status_code=400, detail="Configure credentials in Settings first")
-    username, password = creds
-
-    locations = await ensure_locations(db)
-    enabled = [loc for loc in locations if loc.get("enabled", True)]
-    if not any(location_has_ips(loc) for loc in enabled):
-        raise HTTPException(status_code=400, detail="No locations have server MGMT IPs configured")
+    username, password, locations = await _require_report_inputs()
 
     async def runner(collector: ReportCollector, on_progress) -> dict:
         return await collector.generate_overprovision_report(
@@ -226,16 +263,66 @@ async def generate_overprovision_report() -> dict:
     return await _schedule_report_job("overprovision", runner)
 
 
+@router.post("/generate-custom")
+async def generate_custom_report(payload: CustomGeneratePayload | None = None) -> dict:
+    request = payload or CustomGeneratePayload()
+
+    known_sections = section_ids()
+    sections = [section for section in request.sections if section in known_sections]
+    if not sections:
+        raise HTTPException(status_code=400, detail="Select at least one report section")
+
+    known_metrics = metric_by_id()
+    metrics = [metric for metric in request.metrics if metric in known_metrics]
+    if "metric_sheets" in sections and not metrics:
+        raise HTTPException(
+            status_code=400,
+            detail="Select at least one metric for per-server metric sheets",
+        )
+
+    try:
+        start_date, end_date = resolve_date_range(
+            request.date_preset,
+            request.start_date,
+            request.end_date,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    username, password, locations = await _require_report_inputs()
+
+    async def runner(collector: ReportCollector, on_progress) -> dict:
+        return await collector.generate_custom_report(
+            locations,
+            username,
+            password,
+            sections=sections,
+            metrics=metrics,
+            columns=request.columns,
+            psk_columns=request.psk_columns or None,
+            start_date=start_date,
+            end_date=end_date,
+            on_progress=on_progress,
+        )
+
+    return await _schedule_report_job("custom", runner)
+
+
 @router.get("/download/{filename}")
 async def download_report(filename: str) -> FileResponse:
     safe_name = Path(filename).name
-    if safe_name not in ALLOWED_REPORT_FILES:
+    if not _is_allowed_report(safe_name):
         raise HTTPException(status_code=404, detail="Report not found")
     path = settings.reports_dir / safe_name
     if not path.is_file():
         raise HTTPException(status_code=404, detail="Report not found")
+    media_type = (
+        "application/zip"
+        if safe_name.endswith(".zip")
+        else "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
     return FileResponse(
         path,
-        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        media_type=media_type,
         filename=safe_name,
     )
