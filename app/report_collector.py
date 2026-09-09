@@ -15,6 +15,7 @@ from app.locations import location_has_ips, location_servers
 from app.monitor_target import location_management_ip
 from app.reports.generator import ReportGenerator
 from app.reports.hourly_generator import HourlyReportGenerator
+from app.reports.overprovision_generator import OverprovisionReportGenerator
 from app.paths import static_dir
 
 logger = logging.getLogger(__name__)
@@ -367,6 +368,221 @@ async def fetch_cluster_data(
         return None, {}, str(exc)
 
 
+def _bytes_to_tb(value: Any) -> float | None:
+    number = _num(value)
+    return number / TB if number is not None else None
+
+
+def _parse_cluster_space(latest: dict[str, Any]) -> dict[str, float]:
+    """Extract physical/logical overprovisioning fields from a cluster space sample."""
+    physical_total = _num(
+        latest.get("last_physical_total"),
+        latest.get("physical_total"),
+        latest.get("max_physical_total"),
+    )
+    logical_provisioned = _num(
+        latest.get("last_logical_provisioned"),
+        latest.get("logical_provisioned"),
+        latest.get("max_logical_provisioned"),
+    )
+    logical_used = _num(
+        latest.get("last_logical_used"),
+        latest.get("logical_used"),
+        latest.get("max_logical_used"),
+    )
+    efficiency_ratio = _num(
+        latest.get("last_efficiency_ratio"),
+        latest.get("efficiency_ratio"),
+        latest.get("max_efficiency_ratio"),
+    )
+    thin_savings = _num(
+        latest.get("last_thin_savings"),
+        latest.get("thin_savings"),
+        latest.get("max_thin_savings"),
+    )
+    parsed: dict[str, float] = {}
+    physical_tb = _bytes_to_tb(physical_total)
+    provisioned_tb = _bytes_to_tb(logical_provisioned)
+    used_tb = _bytes_to_tb(logical_used)
+    if physical_tb is not None:
+        parsed["Physical_Total_TB"] = physical_tb
+    if provisioned_tb is not None:
+        parsed["Logical_Provisioned_TB"] = provisioned_tb
+    if used_tb is not None:
+        parsed["Logical_Used_TB"] = used_tb
+    if (
+        physical_total is not None
+        and physical_total > 0
+        and logical_provisioned is not None
+    ):
+        parsed["Overprovisioning_Pct"] = logical_provisioned / physical_total * 100.0
+    if efficiency_ratio is not None:
+        parsed["Efficiency_Ratio"] = efficiency_ratio
+    if thin_savings is not None:
+        parsed["Thin_Savings"] = thin_savings
+    return parsed
+
+
+def _parse_volume_space(volume: dict[str, Any], sample: dict[str, Any] | None) -> dict[str, Any]:
+    size = _num(volume.get("size"))
+    used = None
+    if sample:
+        used = _num(
+            sample.get("last_logical_used"),
+            sample.get("logical_used"),
+            sample.get("physical_used"),
+            sample.get("subscribed_capacity"),
+        )
+    used_pct = None
+    if size is not None and size > 0 and used is not None:
+        used_pct = used / size * 100.0
+    return {
+        "volume_name": volume.get("name") or volume.get("id") or "",
+        "provisioned_tb": _bytes_to_tb(size),
+        "logical_used_tb": _bytes_to_tb(used),
+        "used_pct": used_pct,
+        "type": volume.get("type") or "",
+    }
+
+
+async def fetch_overprovision_server_data(
+    client: PowerStoreClient,
+    server: str,
+    *,
+    interval: str = "Five_Mins",
+) -> tuple[dict[str, float], list[dict[str, Any]], str | None]:
+    """Fetch cluster space snapshot and per-volume space for one array."""
+    try:
+        clusters = await client.get_cluster()
+        if not clusters or clusters[0].get("id") is None:
+            return {}, [], "Cluster identity not returned"
+
+        cluster_id = str(clusters[0]["id"])
+        space_samples = await client.generate_metrics(
+            "space_metrics_by_cluster",
+            cluster_id,
+            interval,
+        )
+        if not space_samples and cluster_id != "0":
+            space_samples = await client.generate_metrics(
+                "space_metrics_by_cluster",
+                "0",
+                interval,
+            )
+        cluster_space = _parse_cluster_space(space_samples[-1]) if space_samples else {}
+
+        volumes: list[dict[str, Any]] = []
+        try:
+            volumes = await client.get_volumes(primary_only=True)
+        except Exception:
+            logger.warning(
+                "Could not retrieve volumes from %s (%s)",
+                server,
+                client.cluster_ip,
+                exc_info=True,
+            )
+
+        volume_rows: list[dict[str, Any]] = []
+        sem = asyncio.Semaphore(8)
+
+        async def fetch_volume(volume: dict[str, Any]) -> dict[str, Any]:
+            volume_id = volume.get("id")
+            sample = None
+            if volume_id:
+                async with sem:
+                    try:
+                        samples = await client.generate_metrics(
+                            "space_metrics_by_volume",
+                            str(volume_id),
+                            interval,
+                        )
+                        if samples:
+                            sample = samples[-1]
+                    except Exception:
+                        sample = None
+            row = _parse_volume_space(volume, sample)
+            row["server"] = server
+            return row
+
+        if volumes:
+            volume_rows = list(await asyncio.gather(*(fetch_volume(v) for v in volumes)))
+            volume_rows.sort(key=lambda row: (row.get("server") or "", row.get("volume_name") or ""))
+
+        if not cluster_space and not volume_rows:
+            error = client.last_metrics_error or f"No space metrics returned for {server}"
+            return {}, [], error
+        return cluster_space, volume_rows, None
+    except PowerStoreAuthError as exc:
+        return {}, [], str(exc)
+    except Exception as exc:
+        logger.exception("Failed fetching overprovisioning data from %s", client.cluster_ip)
+        return {}, [], str(exc)
+
+
+async def fetch_overprovision_location_data(
+    location: dict[str, Any],
+    username: str,
+    password: str,
+    *,
+    on_progress: ProgressFn | None = None,
+) -> tuple[dict[str, dict[str, float]], list[dict[str, Any]], str | None]:
+    name = location["name"]
+    servers = location.get("servers", [])
+    server_ips = dict(location.get("server_ips") or {})
+    default_ip = location_management_ip(location)
+    if not servers:
+        return {}, [], "No servers configured"
+    if not default_ip and not server_ips:
+        return {}, [], "No management IPs configured"
+
+    server_space: dict[str, dict[str, float]] = {}
+    volume_rows: list[dict[str, Any]] = []
+    api_errors: list[str] = []
+
+    for idx, server in enumerate(servers, start=1):
+        target_ip = str(server_ips.get(server) or default_ip).strip()
+        if on_progress:
+            on_progress(
+                name,
+                {
+                    "phase": "host",
+                    "current": idx,
+                    "total": len(servers),
+                    "server": server,
+                    "mgmt_ip": target_ip,
+                },
+            )
+        if not target_ip:
+            api_errors.append(f"{server}: No management IP configured")
+            continue
+
+        client = PowerStoreClient(cluster_ip=target_ip, username=username, password=password)
+        await client.open()
+        try:
+            await client.login(username, password)
+            space, volumes, err = await fetch_overprovision_server_data(client, server)
+        except PowerStoreAuthError as exc:
+            space, volumes, err = {}, [], str(exc)
+        except Exception as exc:
+            logger.exception("Failed connecting to %s (%s)", server, target_ip)
+            space, volumes, err = {}, [], f"Cannot connect to {target_ip}: {exc.__class__.__name__}"
+        finally:
+            await client.close()
+
+        if err:
+            api_errors.append(f"{server}: {err}")
+        if space:
+            server_space[server] = space
+        if volumes:
+            volume_rows.extend(volumes)
+
+    if not server_space and not volume_rows and api_errors:
+        return server_space, volume_rows, "; ".join(api_errors)
+    if api_errors and (server_space or volume_rows):
+        return server_space, volume_rows, f"Partial API failures: {'; '.join(api_errors[:3])}"
+    return server_space, volume_rows, None
+
+
 async def fetch_server_data(
     client: PowerStoreClient,
     server: str,
@@ -605,5 +821,71 @@ class ReportCollector:
             "locations": len(enabled),
             "servers_with_data": len(all_server_data),
             "range_days": days,
+            "used_csv_fallback": False,
+        }
+
+    async def generate_overprovision_report(
+        self,
+        locations: list[dict[str, Any]],
+        username: str,
+        password: str,
+        *,
+        on_progress: ProgressFn | None = None,
+    ) -> dict[str, Any]:
+        enabled = [loc for loc in locations if loc.get("enabled", True) and location_has_ips(loc)]
+        if not enabled:
+            raise ValueError("No enabled locations with server MGMT IPs configured")
+
+        loc_map = location_servers(enabled)
+        all_server_space: dict[str, dict[str, float]] = {}
+        all_volume_rows: dict[str, list[dict[str, Any]]] = {}
+        sem = asyncio.Semaphore(settings.report_fetch_concurrency)
+
+        async def fetch_one(loc: dict[str, Any]) -> None:
+            async with sem:
+                if on_progress:
+                    on_progress(loc["name"], {"phase": "location_start"})
+                space, volumes, err = await fetch_overprovision_location_data(
+                    loc,
+                    username,
+                    password,
+                    on_progress=on_progress,
+                )
+                all_server_space.update(space)
+                all_volume_rows[loc["name"]] = volumes
+                await self.db.update_report_location_status(
+                    loc["name"],
+                    status="partial" if err and (space or volumes) else ("error" if err else "ok"),
+                    error=err,
+                    fetched_at=utc_now() if space or volumes else None,
+                )
+                if on_progress:
+                    on_progress(loc["name"], {"phase": "location_done", "error": err})
+
+        await asyncio.gather(*(fetch_one(loc) for loc in enabled))
+
+        if not all_server_space and not any(all_volume_rows.values()):
+            raise ValueError(
+                "No overprovisioning data retrieved from any location. "
+                "Common causes: metrics API denied (403 — need Administrator role), "
+                "invalid credentials, or network cannot reach the configured server management IPs."
+            )
+
+        if on_progress:
+            on_progress("", {"phase": "generating_overprovision"})
+
+        generator = OverprovisionReportGenerator(
+            output_dir=str(settings.reports_dir),
+            location_servers=loc_map,
+            server_space=all_server_space,
+            volume_rows=all_volume_rows,
+        )
+        output_file = generator.generate()
+        return {
+            "output_file": output_file,
+            "filename": "All_Locations_Overprovisioning_Report.xlsx",
+            "report_type": "overprovision",
+            "locations": len(enabled),
+            "servers_with_data": len(all_server_space),
             "used_csv_fallback": False,
         }

@@ -1192,8 +1192,10 @@ function renderReportStatus() {
   }
   const btn = $('#generate-report');
   const hourlyBtn = $('#generate-hourly-report');
+  const overprovisionBtn = $('#generate-overprovision-report');
   if (btn) btn.disabled = !!status.running;
   if (hourlyBtn) hourlyBtn.disabled = !!status.running;
+  if (overprovisionBtn) overprovisionBtn.disabled = !!status.running;
   if (status.running && !state.reportPollTimer) {
     state.reportPollTimer = setInterval(async () => {
       try {
@@ -1232,9 +1234,11 @@ async function saveReportLocations() {
 }
 
 async function generateReport(endpoint, label) {
-  const btn = endpoint === '/api/reports/generate-hourly'
-    ? $('#generate-hourly-report')
-    : $('#generate-report');
+  const btnMap = {
+    '/api/reports/generate-hourly': '#generate-hourly-report',
+    '/api/reports/generate-overprovision': '#generate-overprovision-report',
+  };
+  const btn = $(btnMap[endpoint] || '#generate-report');
   if (btn) btn.disabled = true;
   try {
     await saveReportLocations();
@@ -1256,6 +1260,9 @@ function setupReports() {
   });
   $('#generate-hourly-report')?.addEventListener('click', async () => {
     try { await generateReport('/api/reports/generate-hourly', 'Hourly TMP report generation'); } catch (e) { toast('Failed: ' + e.message); }
+  });
+  $('#generate-overprovision-report')?.addEventListener('click', async () => {
+    try { await generateReport('/api/reports/generate-overprovision', 'Overprovisioning report generation'); } catch (e) { toast('Failed: ' + e.message); }
   });
 }
 
