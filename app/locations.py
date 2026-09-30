@@ -116,6 +116,30 @@ def location_servers(locations: list[dict[str, Any]]) -> dict[str, list[str]]:
     return {loc["name"]: list(loc["servers"]) for loc in locations if loc.get("enabled", True)}
 
 
+def filter_locations_by_server(
+    locations: list[dict[str, Any]],
+    server: str | None,
+) -> list[dict[str, Any]]:
+    """Keep every location, or only the location that owns the named machine."""
+    name = (server or "").strip()
+    if not name:
+        return locations
+    matched: list[dict[str, Any]] = []
+    for loc in locations:
+        servers = list(loc.get("servers") or [])
+        if name not in servers:
+            continue
+        ips = dict(loc.get("server_ips") or {})
+        matched.append({
+            **loc,
+            "servers": [name],
+            "server_ips": {name: ips[name]} if name in ips else {},
+        })
+    if not matched:
+        raise ValueError(f"Unknown machine: {name}")
+    return matched
+
+
 def location_has_ips(location: dict[str, Any]) -> bool:
     ips = location.get("server_ips") or {}
     if any(str(ip).strip() for ip in ips.values()):

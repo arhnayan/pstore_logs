@@ -19,11 +19,16 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+def _env_bool(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 @dataclass(frozen=True)
 class Settings:
     cluster_ip: str = os.environ.get("PSTORE_CLUSTER_IP", "")
     host: str = os.environ.get("PSTORE_HOST", "127.0.0.1")
     port: int = _env_int("PSTORE_PORT", 9090)
+    mock: bool = _env_bool("PSTORE_MOCK")
 
     poll_alerts_sec: int = 5
     poll_events_sec: int = 15
@@ -60,7 +65,8 @@ class Settings:
 
     @property
     def db_path(self) -> Path:
-        return self.data_dir / "pstore.db"
+        name = "pstore-mock.db" if self.mock else "pstore.db"
+        return self.data_dir / name
 
     def ensure_data_dir(self) -> Path:
         path = self.data_dir
@@ -75,7 +81,8 @@ class Settings:
 
     @property
     def reports_dir(self) -> Path:
-        path = self.data_dir / "reports"
+        folder = "reports-mock" if self.mock else "reports"
+        path = self.data_dir / folder
         path.mkdir(parents=True, exist_ok=True)
         return path
 

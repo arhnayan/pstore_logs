@@ -27,6 +27,23 @@ uvicorn app.main:app --host 0.0.0.0 --port 9090
 
 Open http://127.0.0.1:9090 in your browser.
 
+### Mock data (no cluster)
+
+Start with sample data and skip every PowerStore connection. Useful for UI and report checks without production credentials or a rebuilt exe pointed at the lab.
+
+```bash
+PSTORE_MOCK=1 uvicorn app.main:app --host 127.0.0.1 --port 9090
+```
+
+Standalone / Windows build:
+
+```bash
+python3 run_standalone.py --mock
+.\pstore-monitor.exe --mock
+```
+
+The status bar shows **MOCK DATA**. Reports generate without saved credentials. Live monitoring still uses the selected location name, but the numbers come from the built-in sample cluster. Mock mode writes to `pstore-mock.db` and `reports-mock/`, so sample rows and Excel files stay separate from live data.
+
 On first launch, go to **Settings**, pick a **live monitoring location** (Vodafone site), and save your PowerStore admin credentials. They are stored locally in the app SQLite database under your user data directory, not in the repo.
 
 ## CLI (legacy script)
@@ -110,6 +127,7 @@ Data is stored in `%LOCALAPPDATA%\pstore-monitor\`. Credentials go to Windows Cr
 
 ```powershell
 .\pstore-monitor.exe --port 9090
+.\pstore-monitor.exe --mock
 ```
 
 Or set an environment variable before starting:

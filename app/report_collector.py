@@ -9,11 +9,12 @@ from typing import Any, Callable
 
 import pandas as pd
 
-from app.client import PowerStoreClient, PowerStoreAuthError
+from app.client import PowerStoreAuthError, PowerStoreClient, create_client
 from app.config import settings
 from app.db import Database, utc_now
 from app.locations import location_has_ips, location_servers
 from app.monitor_target import location_management_ip
+from app.reports.cute_theme import apply_huseyin_special
 from app.reports.custom_generator import CustomReportGenerator
 from app.reports.generator import ReportGenerator
 from app.reports.hourly_generator import HourlyReportGenerator
@@ -688,7 +689,7 @@ async def fetch_overprovision_location_data(
             api_errors.append(f"{server}: No management IP configured")
             continue
 
-        client = PowerStoreClient(cluster_ip=target_ip, username=username, password=password)
+        client = create_client(cluster_ip=target_ip, username=username, password=password)
         await client.open()
         try:
             await client.login(username, password)
@@ -792,7 +793,7 @@ async def fetch_location_data(
             api_errors.append(f"{server}: No management IP configured")
             continue
 
-        client = PowerStoreClient(cluster_ip=target_ip, username=username, password=password)
+        client = create_client(cluster_ip=target_ip, username=username, password=password)
         await client.open()
         try:
             await client.login(username, password)
@@ -898,6 +899,7 @@ class ReportCollector:
         *,
         days: int = 30,
         on_progress: ProgressFn | None = None,
+        huseyin_special: bool = False,
     ) -> dict[str, Any]:
         if days != 30:
             raise ValueError("PowerStore reports support exactly the latest 30 days")
@@ -924,6 +926,8 @@ class ReportCollector:
         if all_capacity:
             generator.set_capacity_data(all_capacity)
         output_file = generator.generate_combined_report()
+        if huseyin_special:
+            apply_huseyin_special(output_file)
         return {
             "output_file": output_file,
             "filename": "All_Locations_Storage_Report.xlsx",
@@ -942,6 +946,7 @@ class ReportCollector:
         *,
         days: int = 30,
         on_progress: ProgressFn | None = None,
+        huseyin_special: bool = False,
     ) -> dict[str, Any]:
         if days != 30:
             raise ValueError("PowerStore reports support exactly the latest 30 days")
@@ -963,6 +968,8 @@ class ReportCollector:
             static_dir=static_dir(),
         )
         output_file = generator.generate()
+        if huseyin_special:
+            apply_huseyin_special(output_file)
         return {
             "output_file": output_file,
             "filename": "All_TMPs.xlsx",
@@ -980,6 +987,7 @@ class ReportCollector:
         password: str,
         *,
         on_progress: ProgressFn | None = None,
+        huseyin_special: bool = False,
     ) -> dict[str, Any]:
         enabled = [loc for loc in locations if loc.get("enabled", True) and location_has_ips(loc)]
         if not enabled:
@@ -1030,6 +1038,8 @@ class ReportCollector:
             volume_rows=all_volume_rows,
         )
         output_file = generator.generate()
+        if huseyin_special:
+            apply_huseyin_special(output_file)
         return {
             "output_file": output_file,
             "filename": "All_Locations_Overprovisioning_Report.xlsx",
@@ -1052,6 +1062,7 @@ class ReportCollector:
         start_date: date,
         end_date: date,
         on_progress: ProgressFn | None = None,
+        huseyin_special: bool = False,
     ) -> dict[str, Any]:
         all_server_data, _, loc_map, enabled = await self._fetch_enabled_locations(
             locations,
@@ -1076,6 +1087,8 @@ class ReportCollector:
             static_dir=static_dir(),
         )
         result = generator.generate()
+        if huseyin_special:
+            apply_huseyin_special(result["output_file"])
         return {
             "output_file": result["output_file"],
             "filename": result["filename"],

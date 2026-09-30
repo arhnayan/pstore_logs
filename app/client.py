@@ -483,7 +483,7 @@ class SyncPowerStoreClient:
     """Synchronous wrapper for CLI usage."""
 
     def __init__(self, **kwargs: Any) -> None:
-        self._async = PowerStoreClient(**kwargs)
+        self._async = create_client(**kwargs)
         self._loop: asyncio.AbstractEventLoop | None = None
 
     def __enter__(self) -> SyncPowerStoreClient:
@@ -513,3 +513,12 @@ class SyncPowerStoreClient:
 
     def get_hardware(self) -> list[dict[str, Any]]:
         return self._run(self._async.get_hardware())
+
+
+def create_client(**kwargs: Any) -> PowerStoreClient:
+    """Return a live client, or the in-process mock when PSTORE_MOCK is set."""
+    if settings.mock:
+        from app.mock_client import MockPowerStoreClient
+
+        return MockPowerStoreClient(**kwargs)
+    return PowerStoreClient(**kwargs)

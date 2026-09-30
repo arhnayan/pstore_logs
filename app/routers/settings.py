@@ -6,7 +6,7 @@ import httpx
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from app.client import PowerStoreAuthError, PowerStoreClient
+from app.client import PowerStoreAuthError, create_client
 from app.config import settings
 from app.credentials import clear_credentials, get_credentials, has_credentials, set_credentials
 from app.deps import collector, db
@@ -54,6 +54,7 @@ async def get_settings() -> dict:
         "monitor_location": await get_monitor_location_name(db) or "",
         "locations": options,
         "has_credentials": await has_credentials(),
+        "mock": settings.mock,
         "username": creds[0] if creds else None,
         "poll_intervals": {
             "alerts": settings.poll_alerts_sec,
@@ -93,7 +94,7 @@ async def _validation_ips() -> list[str]:
 
 
 async def _try_login(cluster_ip: str, username: str, password: str) -> None:
-    client = PowerStoreClient(
+    client = create_client(
         cluster_ip=cluster_ip,
         username=username,
         password=password,

@@ -11,9 +11,9 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from app.config import settings
-from app.credentials import get_credentials, has_credentials
+from app.credentials import get_credentials
 from app.deps import db, event_bus
-from app.locations import ensure_locations, location_has_ips
+from app.locations import ensure_locations, filter_locations_by_server, location_has_ips
 from app.report_collector import ReportCollector
 from app.reports.catalog import (
     catalog_payload,
@@ -45,6 +45,7 @@ ALLOWED_REPORT_FILES = {
     "Custom_Storage_Report.xlsx",
     "Custom_Storage_Report.zip",
     "Custom_All_TMPs.xlsx",
+    "Custom_All_Reports.xlsx",
 }
 
 
@@ -63,6 +64,8 @@ class LocationsPayload(BaseModel):
 
 class GeneratePayload(BaseModel):
     days: int = Field(default=30, ge=30, le=30)
+    server: str | None = None
+    huseyin_special: bool = False
 
 
 class CustomGeneratePayload(BaseModel):
@@ -73,6 +76,8 @@ class CustomGeneratePayload(BaseModel):
     date_preset: str = "30d"
     start_date: str | None = None
     end_date: str | None = None
+    server: str | None = None
+    huseyin_special: bool = False
 
 
 def _start_report_job(report_type: str) -> None:
@@ -155,17 +160,32 @@ def _is_allowed_report(filename: str) -> bool:
     return filename.startswith("Custom_") and filename.endswith((".xlsx", ".zip"))
 
 
-async def _require_report_inputs() -> tuple[str, str, list[dict]]:
-    if not await has_credentials():
-        raise HTTPException(status_code=400, detail="Configure credentials in Settings first")
-    creds = await get_credentials()
-    if not creds:
-        raise HTTPException(status_code=400, detail="Configure credentials in Settings first")
-    username, password = creds
-    locations = await ensure_locations(db)
-    enabled = [loc for loc in locations if loc.get("enabled", True)]
+def _scope_locations(locations: list[dict], server: str | None) -> list[dict]:
+    try:
+        scoped = filter_locations_by_server(locations, server)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    enabled = [loc for loc in scoped if loc.get("enabled", True)]
     if not any(location_has_ips(loc) for loc in enabled):
-        raise HTTPException(status_code=400, detail="No locations have server MGMT IPs configured")
+        name = (server or "").strip()
+        detail = (
+            f"Machine {name} has no management IP configured"
+            if name
+            else "No locations have server MGMT IPs configured"
+        )
+        raise HTTPException(status_code=400, detail=detail)
+    return scoped
+
+
+async def _require_report_inputs(server: str | None = None) -> tuple[str, str, list[dict]]:
+    creds = await get_credentials()
+    if settings.mock:
+        username, password = creds if creds else ("mock", "mock")
+    else:
+        if not creds:
+            raise HTTPException(status_code=400, detail="Configure credentials in Settings first")
+        username, password = creds
+    locations = _scope_locations(await ensure_locations(db), server)
     return username, password, locations
 
 
@@ -195,18 +215,7 @@ async def custom_report_options() -> dict:
 @router.post("/generate")
 async def generate_report(payload: GeneratePayload | None = None) -> dict:
     request = payload or GeneratePayload()
-    if not await has_credentials():
-        raise HTTPException(status_code=400, detail="Configure credentials in Settings first")
-
-    creds = await get_credentials()
-    if not creds:
-        raise HTTPException(status_code=400, detail="Configure credentials in Settings first")
-    username, password = creds
-
-    locations = await ensure_locations(db)
-    enabled = [loc for loc in locations if loc.get("enabled", True)]
-    if not any(location_has_ips(loc) for loc in enabled):
-        raise HTTPException(status_code=400, detail="No locations have server MGMT IPs configured")
+    username, password, locations = await _require_report_inputs(request.server)
 
     async def runner(collector: ReportCollector, on_progress) -> dict:
         return await collector.generate_combined_report(
@@ -215,6 +224,7 @@ async def generate_report(payload: GeneratePayload | None = None) -> dict:
             password,
             days=request.days,
             on_progress=on_progress,
+            huseyin_special=request.huseyin_special,
         )
 
     return await _schedule_report_job("summary", runner)
@@ -223,18 +233,7 @@ async def generate_report(payload: GeneratePayload | None = None) -> dict:
 @router.post("/generate-hourly")
 async def generate_hourly_report(payload: GeneratePayload | None = None) -> dict:
     request = payload or GeneratePayload()
-    if not await has_credentials():
-        raise HTTPException(status_code=400, detail="Configure credentials in Settings first")
-
-    creds = await get_credentials()
-    if not creds:
-        raise HTTPException(status_code=400, detail="Configure credentials in Settings first")
-    username, password = creds
-
-    locations = await ensure_locations(db)
-    enabled = [loc for loc in locations if loc.get("enabled", True)]
-    if not any(location_has_ips(loc) for loc in enabled):
-        raise HTTPException(status_code=400, detail="No locations have server MGMT IPs configured")
+    username, password, locations = await _require_report_inputs(request.server)
 
     async def runner(collector: ReportCollector, on_progress) -> dict:
         return await collector.generate_hourly_tmp_report(
@@ -243,14 +242,16 @@ async def generate_hourly_report(payload: GeneratePayload | None = None) -> dict
             password,
             days=request.days,
             on_progress=on_progress,
+            huseyin_special=request.huseyin_special,
         )
 
     return await _schedule_report_job("hourly", runner)
 
 
 @router.post("/generate-overprovision")
-async def generate_overprovision_report() -> dict:
-    username, password, locations = await _require_report_inputs()
+async def generate_overprovision_report(payload: GeneratePayload | None = None) -> dict:
+    request = payload or GeneratePayload()
+    username, password, locations = await _require_report_inputs(request.server)
 
     async def runner(collector: ReportCollector, on_progress) -> dict:
         return await collector.generate_overprovision_report(
@@ -258,6 +259,7 @@ async def generate_overprovision_report() -> dict:
             username,
             password,
             on_progress=on_progress,
+            huseyin_special=request.huseyin_special,
         )
 
     return await _schedule_report_job("overprovision", runner)
@@ -289,7 +291,7 @@ async def generate_custom_report(payload: CustomGeneratePayload | None = None) -
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    username, password, locations = await _require_report_inputs()
+    username, password, locations = await _require_report_inputs(request.server)
 
     async def runner(collector: ReportCollector, on_progress) -> dict:
         return await collector.generate_custom_report(
@@ -303,6 +305,7 @@ async def generate_custom_report(payload: CustomGeneratePayload | None = None) -
             start_date=start_date,
             end_date=end_date,
             on_progress=on_progress,
+            huseyin_special=request.huseyin_special,
         )
 
     return await _schedule_report_job("custom", runner)

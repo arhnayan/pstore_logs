@@ -20,17 +20,30 @@ SECTIONS: list[dict[str, Any]] = [
     },
     {
         "id": "tmp_sheets",
-        "label": "TMP sheets",
-        "description": "Combined hourly table per server in each location workbook",
+        "label": "Summary sheets",
+        "description": "Combined hourly table per server in each location report",
         "default": True,
     },
     {
         "id": "all_tmps",
-        "label": "All_TMPs.xlsx",
+        "label": "All locations report",
         "description": "Combined hourly workbook across all locations and servers",
         "default": True,
     },
+    {
+        "id": "executive",
+        "label": "Executive summary",
+        "description": "Short per-location read of CPU, IOPS, and latency, with charts",
+        "default": False,
+    },
 ]
+
+# Display names for IO size columns. Internal ids stay "Avg. Size", "Read Size", "Write Size".
+SIZE_COLUMN_LABELS = {
+    "Avg. Size": "Avg. Size (Block Size)",
+    "Read Size": "Read Size (Block Size)",
+    "Write Size": "Write Size (Block Size)",
+}
 
 # Columns used by the legacy PSK sheet (subset of IOPS + IO Size + Latency).
 PSK_COLUMNS = [
@@ -83,9 +96,9 @@ METRICS: list[dict[str, Any]] = [
         "columns": [
             {"id": "DateTime", "label": "DateTime", "required": True},
             {"id": "Latency", "label": "Latency"},
-            {"id": "Avg. Size", "label": "Avg. Size"},
-            {"id": "Read Size", "label": "Read Size"},
-            {"id": "Write Size", "label": "Write Size"},
+            {"id": "Avg. Size", "label": SIZE_COLUMN_LABELS["Avg. Size"]},
+            {"id": "Read Size", "label": SIZE_COLUMN_LABELS["Read Size"]},
+            {"id": "Write Size", "label": SIZE_COLUMN_LABELS["Write Size"]},
         ],
     },
     {
@@ -308,7 +321,14 @@ def catalog_payload() -> dict[str, Any]:
         "sections": SECTIONS,
         "metrics": METRICS,
         "date_presets": DATE_PRESETS,
-        "psk_columns": [{"id": column, "label": column, "required": column == "DateTime"} for column in PSK_COLUMNS],
+        "psk_columns": [
+            {
+                "id": column,
+                "label": SIZE_COLUMN_LABELS.get(column, column),
+                "required": column == "DateTime",
+            }
+            for column in PSK_COLUMNS
+        ],
         "note": (
             "PowerStore hourly metrics cover roughly the last 30 days. "
             "Specified ranges are inclusive of both dates and clipped to available samples."

@@ -66,6 +66,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--host", help="Bind address (default: 127.0.0.1 or PSTORE_HOST)")
     parser.add_argument("--port", type=int, help="Listen port (default: 9090 or PSTORE_PORT)")
     parser.add_argument("--no-browser", action="store_true", help="Do not open a browser tab")
+    parser.add_argument(
+        "--mock",
+        action="store_true",
+        help="Serve built-in sample data and do not connect to a PowerStore cluster",
+    )
     return parser.parse_args()
 
 
@@ -80,6 +85,9 @@ def main() -> None:
         os.environ["PSTORE_HOST"] = args.host
     if args.port is not None:
         os.environ["PSTORE_PORT"] = str(args.port)
+    if args.mock:
+        os.environ["PSTORE_MOCK"] = "1"
+        _log("Mock data mode: PowerStore clusters will not be contacted")
 
     import uvicorn
 

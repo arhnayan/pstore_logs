@@ -14,29 +14,29 @@ from openpyxl.utils.dataframe import dataframe_to_rows
 from openpyxl.workbook import Workbook
 
 from app.reports.catalog import (
+    SIZE_COLUMN_LABELS,
     combined_tmp_columns,
     metric_by_id,
     resolve_metric_columns,
     resolve_psk_columns,
 )
+from app.reports.executive import write_executive_sheet
 from app.reports.hourly_generator import (
+    LATENCY_NUMBER_FORMAT,
     HourlyReportGenerator,
     TMP_COLUMNS,
     _clean_location,
-    _style_tmp_sheet,
+    _style_summary_sheet,
     build_server_tmp_table,
 )
 
-HEADER_FILL = PatternFill(start_color="D9D9D9", end_color="D9D9D9", fill_type="solid")
+HEADER_FILL = PatternFill(start_color="FFD9D9D9", end_color="FFD9D9D9", fill_type="solid")
 THIN_BORDER = Border(
-    left=Side(style="thin", color="000000"),
-    right=Side(style="thin", color="000000"),
-    top=Side(style="thin", color="000000"),
-    bottom=Side(style="thin", color="000000"),
+    left=Side(style="thin", color="FF000000"),
+    right=Side(style="thin", color="FF000000"),
+    top=Side(style="thin", color="FF000000"),
+    bottom=Side(style="thin", color="FF000000"),
 )
-BOLD = Font(bold=True)
-
-
 def _sheet_name(name: str) -> str:
     cleaned = re.sub(r"[\\/*?:\[\]]", "", name).strip() or "Sheet"
     return cleaned[:31]
@@ -51,33 +51,34 @@ def _as_datetime_frame(df: pd.DataFrame) -> pd.DataFrame:
     return work
 
 
-def _auto_width(worksheet) -> None:
-    for column in worksheet.columns:
-        max_length = 0
-        column_letter = column[0].column_letter
-        for cell in column:
-            try:
-                if cell.value is not None and len(str(cell.value)) > max_length:
-                    max_length = len(str(cell.value))
-            except Exception:
-                pass
-        worksheet.column_dimensions[column_letter].width = min(max_length + 2, 50)
-
-
 def _style_metric_sheet(worksheet) -> None:
-    for cell in worksheet[1]:
+    header_font = Font(name="Calibri", size=11, bold=True)
+    data_font = Font(name="Calibri", size=11)
+    cpu_font = Font(name="Calibri", size=11, bold=True)
+    latency_cols: set[int] = set()
+    cpu_cols: set[int] = set()
+    for col_idx, cell in enumerate(worksheet[1], 1):
+        header = str(cell.value or "")
         cell.fill = HEADER_FILL
-        cell.font = BOLD
+        cell.font = header_font
         cell.border = THIN_BORDER
-    for row in worksheet.iter_rows(min_row=2):
+        if "Latency" in header:
+            latency_cols.add(col_idx)
+        if "CPU Utilization" in header:
+            cpu_cols.add(col_idx)
+        if header == "DateTime":
+            width = 21
+        elif "Latency" in header:
+            width = 20
+        else:
+            width = min(max(len(header) + 4, 12), 36)
+        worksheet.column_dimensions[cell.column_letter].width = width
+    for row in worksheet.iter_rows(min_row=2, max_row=worksheet.max_row, max_col=worksheet.max_column):
         for cell in row:
             cell.border = THIN_BORDER
-    for col_idx, cell in enumerate(worksheet[1], 1):
-        if cell.value and "CPU Utilization" in str(cell.value):
-            for row in worksheet.iter_rows(min_row=1, min_col=col_idx, max_col=col_idx):
-                for item in row:
-                    item.font = Font(bold=True)
-    _auto_width(worksheet)
+            cell.font = cpu_font if cell.column in cpu_cols else data_font
+            if cell.column in latency_cols and isinstance(cell.value, (int, float)):
+                cell.number_format = LATENCY_NUMBER_FORMAT
 
 
 def _select_columns(df: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
@@ -196,6 +197,7 @@ class CustomReportGenerator:
             if subset.empty or not present:
                 continue
             subset = subset[["DateTime"] + present]
+            subset = subset.rename(columns=SIZE_COLUMN_LABELS)
             suffix = metric.get("sheet_suffix") or metric_id
             title = self._unique_sheet_name(f"{location_clean}_{server}_{suffix}")
             worksheet = workbook.create_sheet(title=title)
@@ -206,19 +208,25 @@ class CustomReportGenerator:
         return written
 
     def _write_tmp_sheet(self, workbook: Workbook, location: str, server: str, df: pd.DataFrame) -> None:
-        tmp_df = build_server_tmp_table(location, server, df, columns=self.tmp_columns)
-        title = self._unique_sheet_name(f"{_clean_location(location)}_{server}_TMP")
+        tmp_df = build_server_tmp_table(
+            location,
+            server,
+            df,
+            columns=self.tmp_columns,
+            header_labels=SIZE_COLUMN_LABELS,
+        )
+        title = self._unique_sheet_name(f"{_clean_location(location)}_{server}_Summary")
         worksheet = workbook.create_sheet(title=title)
         for row in dataframe_to_rows(tmp_df, index=False, header=False):
             worksheet.append(row)
-        _style_tmp_sheet(worksheet)
+        _style_summary_sheet(worksheet)
 
     def _write_location_workbook(self, location: str, servers: list[str]) -> Path | None:
         frames = self._location_frames(servers)
         if not frames:
             return None
 
-        wants_location = bool(self.sections & {"psk", "metric_sheets", "tmp_sheets"})
+        wants_location = bool(self.sections & {"psk", "metric_sheets", "tmp_sheets", "executive"})
         if not wants_location:
             return None
 
@@ -228,12 +236,24 @@ class CustomReportGenerator:
         sheets = 0
         location_clean = _clean_location(location)
 
+        if "executive" in self.sections:
+            pairs = [
+                (server, self.server_data[server])
+                for server in servers
+                if server in self.server_data and not self.server_data[server].empty
+            ]
+            if pairs:
+                title = self._unique_sheet_name(f"{location_clean} Executive")
+                write_executive_sheet(workbook, title, location, pairs)
+                sheets += 1
+
         if "psk" in self.sections:
             psk = generate_psk_sheet(frames, self.psk_columns)
             data_cols = [column for column in psk.columns if column != "DateTime"]
             if data_cols:
                 psk = psk.dropna(how="all", subset=data_cols)
             if not psk.empty:
+                psk = psk.rename(columns=SIZE_COLUMN_LABELS)
                 title = self._unique_sheet_name("PSK")
                 worksheet = workbook.create_sheet(title=title)
                 for row in dataframe_to_rows(psk, index=False, header=True):
@@ -245,11 +265,11 @@ class CustomReportGenerator:
             df = self.server_data.get(server)
             if df is None or df.empty:
                 continue
-            if "metric_sheets" in self.sections:
-                sheets += self._write_metric_sheets(workbook, location, server, df)
             if "tmp_sheets" in self.sections:
                 self._write_tmp_sheet(workbook, location, server, df)
                 sheets += 1
+            if "metric_sheets" in self.sections:
+                sheets += self._write_metric_sheets(workbook, location, server, df)
 
         if sheets == 0:
             return None
@@ -273,7 +293,9 @@ class CustomReportGenerator:
                 server_data=self.server_data,
                 static_dir=self.static_dir,
                 columns=self.tmp_columns,
-                filename="Custom_All_TMPs.xlsx",
+                filename="Custom_All_Reports.xlsx",
+                sheet_style="summary",
+                sheet_suffix="_Summary",
             )
             files.append(Path(hourly.generate()))
 

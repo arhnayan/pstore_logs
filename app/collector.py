@@ -7,7 +7,7 @@ import json
 import logging
 from typing import Any, Awaitable, Callable
 
-from app.client import PowerStoreAuthError, PowerStoreClient
+from app.client import PowerStoreAuthError, PowerStoreClient, create_client
 from app.config import settings
 from app.credentials import get_credentials
 from app.db import Database, utc_now
@@ -48,7 +48,7 @@ class Collector:
     def __init__(self, db: Database, bus: EventBus) -> None:
         self.db = db
         self.bus = bus
-        self._client = PowerStoreClient()
+        self._client = create_client()
         self._tasks: list[asyncio.Task[None]] = []
         self._stop = asyncio.Event()
         self._cluster_id: str | None = None
@@ -56,6 +56,9 @@ class Collector:
         self._node_ids: list[str] = []
 
     async def start(self) -> None:
+        if settings.mock:
+            await self.db.set_status("mock", "1")
+            logger.info("Mock data mode enabled; no PowerStore cluster will be contacted")
         await self._client.open()
         self._stop.clear()
         loops: list[tuple[str, int, PollFn, int]] = [
@@ -109,6 +112,22 @@ class Collector:
         return cluster_ip
 
     async def _ensure_logged_in(self) -> bool:
+        if settings.mock:
+            cluster_ip = await self._sync_cluster_target() or "10.0.0.1"
+            if self._client.cluster_ip != cluster_ip:
+                await self.set_cluster_ip(cluster_ip)
+            location_name = await get_monitor_location_name(self.db) or ""
+            await self.db.set_status("connection", "connected")
+            await self.db.set_status("mock", "1")
+            await self.db.set_status("cluster_ip", cluster_ip)
+            await self.bus.publish("status", {
+                "connection": "connected",
+                "cluster_ip": cluster_ip,
+                "monitor_location": location_name,
+                "mock": "1",
+            })
+            return True
+
         creds = await get_credentials()
         if not creds:
             await self.db.set_status("connection", "no_credentials")

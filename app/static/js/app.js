@@ -227,13 +227,20 @@ function ensureClusterCharts() {
   ], 'CPU %');
 }
 
+function setMockBadge(enabled) {
+  const badge = $('#mock-badge');
+  if (badge) badge.hidden = !enabled;
+}
+
 function updateConnection(status) {
   const dot = $('#conn-dot');
   const text = $('#conn-text');
   const conn = status.connection || 'pending';
   dot.className = 'status-dot ' + (conn === 'connected' ? 'connected' : conn === 'no_credentials' ? 'pending' : 'error');
   const labels = { connected: 'Connected', no_credentials: 'No credentials — configure in Settings', auth_failed: 'Authentication failed', error: 'Connection error' };
-  text.textContent = labels[conn] || conn;
+  const mock = status.mock === '1' || status.mock === 1 || status.mock === true;
+  text.textContent = (labels[conn] || conn) + (mock ? ' · sample data' : '');
+  setMockBadge(mock);
   const last = status.last_perf_fast_poll || status.last_alerts_poll;
   $('#last-poll').textContent = last ? `Last poll: ${fmtTime(last)}` : '';
 }
@@ -1097,8 +1104,9 @@ async function loadSettings() {
     }
 
     if (data.username) $('#settings-username').value = data.username;
-    state.status = { ...state.status, monitor_location: data.monitor_location, cluster_ip: data.cluster_ip };
-    renderReportsCredsWarning(!data.has_credentials);
+    state.status = { ...state.status, monitor_location: data.monitor_location, cluster_ip: data.cluster_ip, mock: data.mock ? '1' : state.status.mock };
+    setMockBadge(!!data.mock || state.status.mock === '1');
+    renderReportsCredsWarning(!data.has_credentials && !data.mock);
   } catch (err) {
     const select = $('#settings-location');
     if (select) select.innerHTML = `<option value="">Failed to load locations: ${err.message}</option>`;
@@ -1135,8 +1143,36 @@ function renderReportsCredsWarning(missing) {
   if (el) el.style.display = missing ? 'block' : 'none';
 }
 
+function escapeHtml(value) {
+  return String(value)
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;');
+}
+
+function renderReportMachinePicker() {
+  const select = $('#report-machine');
+  if (!select) return;
+  const current = select.value;
+  const groups = (state.reportLocations || []).map(loc => {
+    const options = (loc.servers || []).map(server =>
+      `<option value="${escapeHtml(server)}">${escapeHtml(server)}</option>`
+    ).join('');
+    if (!options) return '';
+    return `<optgroup label="${escapeHtml(loc.name)}">${options}</optgroup>`;
+  }).join('');
+  select.innerHTML = `<option value="">All machines</option>${groups}`;
+  if ([...select.options].some(option => option.value === current)) select.value = current;
+}
+
+function selectedReportMachine() {
+  return ($('#report-machine')?.value || '').trim();
+}
+
 function renderReportLocations() {
   const el = $('#report-locations-table');
+  renderReportMachinePicker();
   if (!el) return;
   if (!state.reportLocations.length) {
     el.innerHTML = '<div class="empty">No locations configured.</div>';
@@ -1199,6 +1235,8 @@ function renderReportStatus() {
   if (hourlyBtn) hourlyBtn.disabled = !!status.running;
   if (overprovisionBtn) overprovisionBtn.disabled = !!status.running;
   if (customBtn) customBtn.disabled = !!status.running;
+  const cute = $('#huseyin-special');
+  if (cute) cute.disabled = !!status.running;
   if (status.running && !state.reportPollTimer) {
     state.reportPollTimer = setInterval(async () => {
       try {
@@ -1244,12 +1282,18 @@ async function generateReport(endpoint, label, body = {}) {
   };
   const btn = $(btnMap[endpoint] || '#generate-report');
   if (btn) btn.disabled = true;
+  const server = selectedReportMachine();
+  const payload = {
+    ...body,
+    huseyin_special: !!$('#huseyin-special')?.checked,
+  };
+  if (server) payload.server = server;
   try {
     await saveReportLocations();
     await api(endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
+      body: JSON.stringify(payload),
     });
     toast(`${label} started`);
     await loadReportStatus();
