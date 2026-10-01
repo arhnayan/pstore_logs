@@ -10,6 +10,9 @@ import pandas as pd
 import numpy as np
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+from openpyxl.styles.colors import Color
+
+from app.reports.book_theme import BAND_FILL, HEADER_FILL, apply_book_theme, omit_max_latency
 from openpyxl.utils.dataframe import dataframe_to_rows
 from openpyxl.chart import LineChart, BarChart, PieChart, Reference
 from openpyxl.chart.marker import DataPoint
@@ -316,7 +319,7 @@ class ReportGenerator:
         ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=7)
         cell = ws.cell(row=row, column=1)
         cell.value = header_text
-        cell.fill = self.RED_FILL
+        cell.fill = HEADER_FILL
         cell.font = self.WHITE_FONT
         cell.alignment = Alignment(horizontal='center', vertical='center')
         
@@ -326,12 +329,12 @@ class ReportGenerator:
         """Create a section for one server with capacity and performance data."""
         current_row = start_row
         
-        # Server name header (black)
+        # Server name header, same light blue as the detailed hourly rows
         ws.merge_cells(start_row=current_row, start_column=1, end_row=current_row, end_column=7)
         cell = ws.cell(row=current_row, column=1)
         cell.value = server_name
-        cell.fill = self.BLACK_FILL
-        cell.font = self.WHITE_FONT
+        cell.fill = BAND_FILL
+        cell.font = Font(bold=True, color=Color(theme=1))
         cell.alignment = Alignment(horizontal='center', vertical='center')
         current_row += 1
         
@@ -833,6 +836,7 @@ class ReportGenerator:
         print(f"Generating report for {location}...")
         
         wb = Workbook()
+        apply_book_theme(wb)
         # Remove the default empty sheet so we fully control sheet order/names
         wb.remove(wb.active)
         self.add_location_to_workbook(wb, location, servers)
@@ -898,16 +902,61 @@ class ReportGenerator:
         return wb
 
     def generate_combined_report(self):
-        """Generate one big Excel workbook containing all locations (in order)."""
+        """One cover, then executive, classic capacity, and hourly sheets per location."""
+        from app.paths import static_dir
+        from app.reports.executive import write_executive_sheet
+        from app.reports.hourly_generator import (
+            SUMMARY_HEADER_LABELS,
+            TMP_COLUMNS,
+            _add_cover_sheet,
+            _clean_location,
+            _style_summary_sheet,
+            build_server_tmp_table,
+        )
+
         output_file = os.path.join(self.output_dir, 'All_Locations_Storage_Report.xlsx')
-        
-        wb = Workbook()
-        wb.remove(wb.active)
-        
-        # Add all location reports (each adds its own report + analytics sheets)
-        for location, servers in self.location_servers.items():
-            self.add_location_to_workbook(wb, location, servers)
-        
+        hourly_columns = omit_max_latency(list(TMP_COLUMNS))
+        previous_analytics = self.enable_analytics
+        self.enable_analytics = False
+        try:
+            wb = Workbook()
+            apply_book_theme(wb)
+            wb.remove(wb.active)
+            _add_cover_sheet(wb, static_dir())
+
+            for location, servers in self.location_servers.items():
+                pairs = []
+                for server in servers:
+                    df = self._server_data.get(server)
+                    if df is not None and not getattr(df, "empty", True):
+                        pairs.append((server, df))
+                location_clean = _clean_location(location)
+                if pairs:
+                    write_executive_sheet(
+                        wb,
+                        f"{location_clean} Executive"[:31],
+                        location,
+                        pairs,
+                    )
+                self.add_location_to_workbook(wb, location, servers)
+                for server in servers:
+                    df = self._server_data.get(server)
+                    if df is None or getattr(df, "empty", True):
+                        continue
+                    tmp_df = build_server_tmp_table(
+                        location,
+                        server,
+                        df,
+                        columns=hourly_columns,
+                        header_labels=SUMMARY_HEADER_LABELS,
+                    )
+                    worksheet = wb.create_sheet(title=f"{location_clean}_{server}"[:31])
+                    for row in dataframe_to_rows(tmp_df, index=False, header=False):
+                        worksheet.append(row)
+                    _style_summary_sheet(worksheet)
+        finally:
+            self.enable_analytics = previous_analytics
+
         wb.save(output_file)
         return output_file
     

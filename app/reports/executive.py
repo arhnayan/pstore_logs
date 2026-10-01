@@ -14,11 +14,21 @@ from openpyxl.drawing.text import (
     ParagraphProperties,
     RichTextProperties,
 )
-from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+from openpyxl.styles import Alignment, Font, PatternFill
+from openpyxl.styles.colors import Color
 from openpyxl.utils import get_column_letter
 from openpyxl.workbook import Workbook
 from openpyxl.worksheet.worksheet import Worksheet
 
+from app.reports.book_theme import (
+    ALT_FILL,
+    BAND_FILL,
+    DATA_FONT,
+    HEADER_FILL,
+    HEADER_FONT,
+    HEADER_FONT_COMPACT,
+    THIN_BORDER,
+)
 from app.reports.generator import ReportGenerator
 
 CPU_COLUMN = "CPU Utilization"
@@ -34,21 +44,14 @@ VISIBLE_COLUMNS = 9
 LINE_COLORS = ["4F81BD", "C0504D", "9BBB59", "8064A2", "4BACC6", "F79646", "5B9BD5", "70AD47"]
 MARKER_SHAPES = ["triangle", "diamond", "circle", "square", "star", "x", "plus", "dash"]
 
-HEADER_FILL = PatternFill(start_color="C0C0C0", end_color="C0C0C0", fill_type="solid")
 YELLOW_FILL = PatternFill(start_color="FFFF00", end_color="FFFF00", fill_type="solid")
 LIGHT_RED_FILL = PatternFill(start_color="FF6B6B", end_color="FF6B6B", fill_type="solid")
-THIN_BORDER = Border(
-    left=Side(style="thin", color="000000"),
-    right=Side(style="thin", color="000000"),
-    top=Side(style="thin", color="000000"),
-    bottom=Side(style="thin", color="000000"),
-)
-TITLE_FONT = Font(name="Calibri", size=16, bold=True)
-HEADING_FONT = Font(name="Calibri", size=13, bold=True)
-SUBTITLE_FONT = Font(name="Calibri", size=11, italic=True, color="666666")
-BODY_FONT = Font(name="Calibri", size=11)
-HEADER_FONT = Font(name="Calibri", size=11, bold=True)
-CAPTION_FONT = Font(name="Calibri", size=10, italic=True, color="666666")
+TITLE_FONT = HEADER_FONT
+HEADING_FONT = Font(name="Arial", size=13, bold=True, color=Color(theme=1))
+SUBTITLE_FONT = Font(name="Arial", size=11, italic=True, color=Color(theme=1))
+BODY_FONT = DATA_FONT
+TABLE_HEADER_FONT = HEADER_FONT_COMPACT
+CAPTION_FONT = Font(name="Arial", size=10, italic=True, color=Color(theme=1))
 
 TABLE_HEADERS = [
     "Device",
@@ -259,8 +262,9 @@ def _cpu_fill(value: float | None) -> PatternFill | None:
     return None
 
 
-def _write_number(cell, value: float | None, number_format: str) -> None:
+def _write_number(cell, value: float | None, number_format: str, fill: PatternFill) -> None:
     cell.font = BODY_FONT
+    cell.fill = fill
     cell.border = THIN_BORDER
     cell.alignment = Alignment(horizontal="center", vertical="center")
     if value is None:
@@ -461,6 +465,7 @@ def write_executive_sheet(
         worksheet.column_dimensions[column].width = width
 
     _merge_text(worksheet, 1, f"{location} Yönetici Özeti", TITLE_FONT, 24)
+    worksheet.cell(row=1, column=1).fill = HEADER_FILL
     _merge_text(worksheet, 2, _subtitle(summarized), SUBTITLE_FONT, 18)
     _merge_text(worksheet, 4, "Öne çıkanlar", HEADING_FONT, 20)
 
@@ -474,39 +479,46 @@ def write_executive_sheet(
     header_row = row
     for column, header in enumerate(TABLE_HEADERS, start=1):
         cell = worksheet.cell(row=header_row, column=column, value=header)
-        cell.font = HEADER_FONT
+        cell.font = TABLE_HEADER_FONT
         cell.fill = HEADER_FILL
         cell.border = THIN_BORDER
         cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
     worksheet.row_dimensions[header_row].height = 30
 
     data_row = header_row
+    data_index = 0
     for device in summarized:
         for column in METRIC_COLUMNS:
             data_row += 1
+            row_fill = BAND_FILL if data_index % 2 == 0 else ALT_FILL
+            data_index += 1
             stats = device.metrics.get(column, _MetricStats())
             name_cell = worksheet.cell(row=data_row, column=1, value=device.name)
             name_cell.font = BODY_FONT
+            name_cell.fill = row_fill
             name_cell.border = THIN_BORDER
             name_cell.alignment = Alignment(horizontal="left", vertical="center")
             metric_cell = worksheet.cell(row=data_row, column=2, value=METRIC_LABELS[column])
             metric_cell.font = BODY_FONT
+            metric_cell.fill = row_fill
             metric_cell.border = THIN_BORDER
             metric_cell.alignment = Alignment(horizontal="left", vertical="center")
             number_format = METRIC_FORMATS[column]
-            _write_number(worksheet.cell(row=data_row, column=3), stats.mean, number_format)
-            _write_number(worksheet.cell(row=data_row, column=4), stats.median, number_format)
-            _write_number(worksheet.cell(row=data_row, column=5), stats.std, number_format)
-            _write_number(worksheet.cell(row=data_row, column=6), stats.low, number_format)
-            _write_number(worksheet.cell(row=data_row, column=7), stats.peak, number_format)
+            _write_number(worksheet.cell(row=data_row, column=3), stats.mean, number_format, row_fill)
+            _write_number(worksheet.cell(row=data_row, column=4), stats.median, number_format, row_fill)
+            _write_number(worksheet.cell(row=data_row, column=5), stats.std, number_format, row_fill)
+            _write_number(worksheet.cell(row=data_row, column=6), stats.low, number_format, row_fill)
+            _write_number(worksheet.cell(row=data_row, column=7), stats.peak, number_format, row_fill)
             peak_cell = worksheet.cell(row=data_row, column=8)
             peak_cell.font = BODY_FONT
+            peak_cell.fill = row_fill
             peak_cell.border = THIN_BORDER
             peak_cell.alignment = Alignment(horizontal="center", vertical="center")
             if stats.peak_at is not None:
                 peak_cell.value = stats.peak_at.strftime("%d/%m %H:%M")
             unusual_cell = worksheet.cell(row=data_row, column=9, value=_unusual_label(device, column))
             unusual_cell.font = BODY_FONT
+            unusual_cell.fill = row_fill
             unusual_cell.border = THIN_BORDER
             unusual_cell.alignment = Alignment(horizontal="center", vertical="center")
             if column == CPU_COLUMN:

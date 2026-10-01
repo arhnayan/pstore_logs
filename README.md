@@ -75,7 +75,7 @@ python3 pstore_checks.py --type hardware --json
 
 Go to **Reports** in the sidebar. Six Vodafone locations are pre-seeded with **per-server MGMT IPs** from `VODAFONE NETWORK IP.xlsx`. Save credentials in **Settings**, then click **Generate Summary Report** or **Generate Hourly TMP Report**. The app connects to each server's MGMT IP, pulls hourly host metrics, and writes the Excel workbook to your app data `reports/` folder.
 
-- **Summary report** (`All_Locations_Storage_Report.xlsx`): one sheet per location with capacity and averaged performance.
+- **Summary report** (`All_Locations_Storage_Report.xlsx`): one cover sheet, then for each location an executive sheet, a capacity and averaged-performance sheet, and one hourly sheet per server. Hourly sheets omit max-latency columns.
 - **Hourly TMP report** (`All_TMPs.xlsx`): one sheet per server with hourly rows (Latency, I/O size, IOPS, CPU) matching the legacy `All_TMPs.xlsx` layout.
 
 ## Data storage

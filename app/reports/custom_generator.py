@@ -9,9 +9,10 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
-from openpyxl.styles import Border, Font, PatternFill, Side
 from openpyxl.utils.dataframe import dataframe_to_rows
 from openpyxl.workbook import Workbook
+
+from app.reports.book_theme import apply_book_theme
 
 from app.reports.catalog import (
     SIZE_COLUMN_LABELS,
@@ -22,7 +23,6 @@ from app.reports.catalog import (
 )
 from app.reports.executive import write_executive_sheet
 from app.reports.hourly_generator import (
-    LATENCY_NUMBER_FORMAT,
     HourlyReportGenerator,
     TMP_COLUMNS,
     _clean_location,
@@ -30,13 +30,6 @@ from app.reports.hourly_generator import (
     build_server_tmp_table,
 )
 
-HEADER_FILL = PatternFill(start_color="FFD9D9D9", end_color="FFD9D9D9", fill_type="solid")
-THIN_BORDER = Border(
-    left=Side(style="thin", color="FF000000"),
-    right=Side(style="thin", color="FF000000"),
-    top=Side(style="thin", color="FF000000"),
-    bottom=Side(style="thin", color="FF000000"),
-)
 def _sheet_name(name: str) -> str:
     cleaned = re.sub(r"[\\/*?:\[\]]", "", name).strip() or "Sheet"
     return cleaned[:31]
@@ -52,33 +45,7 @@ def _as_datetime_frame(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _style_metric_sheet(worksheet) -> None:
-    header_font = Font(name="Calibri", size=11, bold=True)
-    data_font = Font(name="Calibri", size=11)
-    cpu_font = Font(name="Calibri", size=11, bold=True)
-    latency_cols: set[int] = set()
-    cpu_cols: set[int] = set()
-    for col_idx, cell in enumerate(worksheet[1], 1):
-        header = str(cell.value or "")
-        cell.fill = HEADER_FILL
-        cell.font = header_font
-        cell.border = THIN_BORDER
-        if "Latency" in header:
-            latency_cols.add(col_idx)
-        if "CPU Utilization" in header:
-            cpu_cols.add(col_idx)
-        if header == "DateTime":
-            width = 21
-        elif "Latency" in header:
-            width = 20
-        else:
-            width = min(max(len(header) + 4, 12), 36)
-        worksheet.column_dimensions[cell.column_letter].width = width
-    for row in worksheet.iter_rows(min_row=2, max_row=worksheet.max_row, max_col=worksheet.max_column):
-        for cell in row:
-            cell.border = THIN_BORDER
-            cell.font = cpu_font if cell.column in cpu_cols else data_font
-            if cell.column in latency_cols and isinstance(cell.value, (int, float)):
-                cell.number_format = LATENCY_NUMBER_FORMAT
+    _style_summary_sheet(worksheet)
 
 
 def _select_columns(df: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
@@ -231,6 +198,7 @@ class CustomReportGenerator:
             return None
 
         workbook = Workbook()
+        apply_book_theme(workbook)
         workbook.remove(workbook.active)
         self._used_sheet_names = set()
         sheets = 0

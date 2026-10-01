@@ -25,6 +25,7 @@ a = Analysis(
     binaries=[],
     datas=[
         ("app/static", "app/static"),
+        ("app/reports/vodafone_theme.xml", "app/reports"),
         ("vodafone-rapor-2/raw_report_csv", "report_csv"),
         ("vodafone-rapor-2/formatted_report_csv", "report_capacity_csv"),
     ],

@@ -8,10 +8,21 @@ from pathlib import Path
 
 import pandas as pd
 from openpyxl import Workbook
-from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
-from openpyxl.styles.colors import Color
+from openpyxl.styles import Alignment, Font
 from openpyxl.utils.dataframe import dataframe_to_rows
 
+from app.reports.book_theme import (
+    ALT_FILL,
+    BAND_FILL,
+    DATA_ALIGN,
+    DATA_FONT,
+    DATA_FONT_BOLD,
+    HEADER_ALIGN,
+    HEADER_FILL,
+    HEADER_FONT,
+    THIN_BORDER,
+    apply_book_theme,
+)
 from app.reports.catalog import (
     CPU_FORMAT_COLUMNS,
     IOPS_FORMAT_COLUMNS,
@@ -43,22 +54,6 @@ TMP_COLUMNS = [
     "CPU Utilization",
 ]
 
-TMP_RED_FILL = PatternFill(start_color="FFFF0000", end_color="FFFF0000", fill_type="solid")
-WHITE_FILL = PatternFill(start_color="FFFFFFFF", end_color="FFFFFFFF", fill_type="solid")
-SUMMARY_GREEN_FILL = PatternFill(start_color="FF92D050", end_color="FF92D050", fill_type="solid")
-SUMMARY_BAND_FILL = PatternFill(fill_type="solid")
-SUMMARY_BAND_FILL.fgColor = Color(theme=3, tint=0.7999816888943144)
-THIN_BORDER = Border(
-    left=Side(style="thin", color="FF000000"),
-    right=Side(style="thin", color="FF000000"),
-    top=Side(style="thin", color="FF000000"),
-    bottom=Side(style="thin", color="FF000000"),
-)
-SUMMARY_HEADER_FONT = Font(name="Calibri", size=16, bold=True, color=Color(theme=1))
-SUMMARY_DATA_FONT = Font(name="Calibri", size=11)
-SUMMARY_CPU_FONT = Font(name="Calibri", size=11, bold=True)
-SUMMARY_HEADER_ALIGN = Alignment(vertical="center")
-SUMMARY_DATA_ALIGN = Alignment(horizontal="left")
 LATENCY_NUMBER_FORMAT = "0.00"
 SIZE_NUMBER_FORMAT = "0"
 
@@ -175,76 +170,55 @@ def _summary_kind(value) -> str:
 
 
 def _style_summary_sheet(worksheet) -> None:
-    """Green header and banded rows, matching Custom_*_Report Summary sheets."""
+    """Book1 table: navy header, Arial, and alternating theme rows."""
     kinds = [_summary_kind(cell.value) for cell in worksheet[1]]
     for idx, row in enumerate(
         worksheet.iter_rows(min_row=1, max_row=worksheet.max_row, max_col=worksheet.max_column),
         1,
     ):
         if idx == 1:
-            fill = SUMMARY_GREEN_FILL
+            fill = HEADER_FILL
         elif idx % 2 == 0:
-            fill = WHITE_FILL
+            fill = BAND_FILL
         else:
-            fill = SUMMARY_BAND_FILL
+            fill = ALT_FILL
         for col_idx, cell in enumerate(row):
             kind = kinds[col_idx] if col_idx < len(kinds) else "other"
             cell.fill = fill
             cell.border = THIN_BORDER
             if idx == 1:
-                cell.font = SUMMARY_HEADER_FONT
-                cell.alignment = SUMMARY_HEADER_ALIGN
+                cell.font = HEADER_FONT
+                cell.alignment = HEADER_ALIGN
                 continue
-            cell.font = SUMMARY_CPU_FONT if kind == "cpu" else SUMMARY_DATA_FONT
-            cell.alignment = SUMMARY_DATA_ALIGN
+            cell.font = DATA_FONT_BOLD if kind == "cpu" else DATA_FONT
+            cell.alignment = DATA_ALIGN
             if kind == "latency" and isinstance(cell.value, (int, float)):
                 cell.number_format = LATENCY_NUMBER_FORMAT
             elif kind == "size" and isinstance(cell.value, (int, float)):
                 cell.number_format = SIZE_NUMBER_FORMAT
 
-    worksheet.row_dimensions[1].height = 33
+    worksheet.row_dimensions[1].height = 22
     for col_idx, cell in enumerate(worksheet[1], 1):
         header = str(cell.value or "")
         width = SUMMARY_COLUMN_WIDTHS.get(header)
         if width is None:
             width = min(max(len(header) * 1.25 + 2, 12), 40)
         if col_idx == 1:
-            width = max(width, 29)
+            width = max(width, 45)
         dimension = worksheet.column_dimensions[cell.column_letter]
         dimension.width = width
         dimension.bestFit = True
 
 
 def _style_tmp_sheet(worksheet) -> None:
-    for idx, row in enumerate(worksheet.iter_rows(min_row=1, max_row=worksheet.max_row, min_col=1), 1):
-        fill = TMP_RED_FILL if idx % 2 == 1 else WHITE_FILL
-        for cell in row:
-            cell.fill = fill
-            cell.border = THIN_BORDER
-
-    for col_idx, cell in enumerate(worksheet[1], 1):
-        if cell.value and "CPU Utilization" in str(cell.value):
-            for row in worksheet.iter_rows(min_row=1, min_col=col_idx, max_col=col_idx):
-                for item in row:
-                    item.font = Font(bold=True)
-
-    for column in worksheet.columns:
-        max_length = 0
-        column_letter = column[0].column_letter
-        for cell in column:
-            try:
-                if cell.value is not None and len(str(cell.value)) > max_length:
-                    max_length = len(str(cell.value))
-            except Exception:
-                pass
-        worksheet.column_dimensions[column_letter].width = min(max_length + 2, 50)
+    _style_summary_sheet(worksheet)
 
 
 def _add_cover_sheet(workbook: Workbook, static_dir: Path | None) -> None:
     cover = workbook.create_sheet(title="Cover", index=0)
     cover.merge_cells("C10:M13")
     cover["C10"] = "Vodafone All Locations Storage Performance Report"
-    cover["C10"].font = Font(size=28, bold=True)
+    cover["C10"].font = Font(name="Arial", size=28, bold=True)
     cover["C10"].alignment = Alignment(horizontal="center", vertical="center")
 
     for row in cover.iter_rows():
@@ -299,6 +273,7 @@ class HourlyReportGenerator:
 
     def generate(self) -> str:
         workbook = Workbook()
+        apply_book_theme(workbook)
         workbook.remove(workbook.active)
         _add_cover_sheet(workbook, self.static_dir)
 

@@ -7,8 +7,20 @@ import re
 from typing import Any
 
 from openpyxl import Workbook
-from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+from openpyxl.styles import Alignment, PatternFill
 from openpyxl.utils import get_column_letter
+
+from app.reports.book_theme import (
+    ALT_FILL,
+    BAND_FILL,
+    CENTER_ALIGN,
+    DATA_FONT,
+    HEADER_FILL,
+    HEADER_FONT,
+    HEADER_FONT_COMPACT,
+    THIN_BORDER,
+    apply_book_theme,
+)
 
 SUMMARY_HEADERS = [
     "Physical Total (TB)",
@@ -38,18 +50,13 @@ def _sheet_name(name: str) -> str:
 
 
 class OverprovisionReportGenerator:
-    RED_FILL = PatternFill(start_color="FF0000", end_color="FF0000", fill_type="solid")
-    BLACK_FILL = PatternFill(start_color="000000", end_color="000000", fill_type="solid")
-    GREY_FILL = PatternFill(start_color="C0C0C0", end_color="C0C0C0", fill_type="solid")
+    RED_FILL = HEADER_FILL
+    BLACK_FILL = HEADER_FILL
+    GREY_FILL = HEADER_FILL
     YELLOW_FILL = PatternFill(start_color="FFFF00", end_color="FFFF00", fill_type="solid")
     LIGHT_RED_FILL = PatternFill(start_color="FF6B6B", end_color="FF6B6B", fill_type="solid")
-    WHITE_FONT = Font(color="FFFFFF", bold=True)
-    BORDER = Border(
-        left=Side(style="thin"),
-        right=Side(style="thin"),
-        top=Side(style="thin"),
-        bottom=Side(style="thin"),
-    )
+    WHITE_FONT = HEADER_FONT
+    BORDER = THIN_BORDER
 
     def __init__(
         self,
@@ -78,8 +85,8 @@ class OverprovisionReportGenerator:
 
     def _style_header_cell(self, cell, fill) -> None:
         cell.fill = fill
-        cell.font = self.WHITE_FONT if fill in (self.RED_FILL, self.BLACK_FILL) else Font(bold=True)
-        cell.alignment = Alignment(horizontal="center", vertical="center")
+        cell.font = HEADER_FONT_COMPACT if fill is self.GREY_FILL else self.WHITE_FONT
+        cell.alignment = CENTER_ALIGN
         cell.border = self.BORDER
 
     def _write_grey_headers(self, ws, row: int, headers: list[str]) -> None:
@@ -162,7 +169,9 @@ class OverprovisionReportGenerator:
             cell = ws.cell(row=current_row, column=col_idx)
             cell.value = value
             cell.border = self.BORDER
-            cell.alignment = Alignment(horizontal="center", vertical="center")
+            cell.font = DATA_FONT
+            cell.fill = ALT_FILL
+            cell.alignment = CENTER_ALIGN
             if col_idx in tb_cols and isinstance(value, (int, float)):
                 cell.number_format = "0.00"
             if col_idx == over_col and isinstance(value, (int, float)):
@@ -207,7 +216,9 @@ class OverprovisionReportGenerator:
                 cell = ws.cell(row=excel_row, column=col_idx)
                 cell.value = value
                 cell.border = self.BORDER
-                cell.alignment = Alignment(horizontal="center", vertical="center")
+                cell.font = DATA_FONT
+                cell.fill = BAND_FILL if idx % 2 == 0 else ALT_FILL
+                cell.alignment = CENTER_ALIGN
                 if col_idx in (3, 4) and isinstance(value, (int, float)):
                     cell.number_format = "0.00"
                 if col_idx == 5 and isinstance(value, (int, float)):
@@ -215,6 +226,7 @@ class OverprovisionReportGenerator:
 
     def generate(self) -> str:
         workbook = Workbook()
+        apply_book_theme(workbook)
         workbook.remove(workbook.active)
         self._used_sheet_names.clear()
 
