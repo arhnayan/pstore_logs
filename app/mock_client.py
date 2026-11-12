@@ -287,6 +287,32 @@ class MockPowerStoreClient(PowerStoreClient):
             },
         ]
 
+    async def get_initiators(self) -> list[dict[str, Any]]:
+        """Two FC initiators per host. Hosts named in PSTORE_MOCK_DOWN (comma
+        separated) have no sessions; PSTORE_MOCK_DEGRADED loses one initiator."""
+        import os
+
+        down = {n.strip() for n in os.environ.get("PSTORE_MOCK_DOWN", "").split(",") if n.strip()}
+        degraded = {n.strip() for n in os.environ.get("PSTORE_MOCK_DEGRADED", "").split(",") if n.strip()}
+        session = [{"port_name": "58:cc:f0:90:49:20:00:01", "appliance_id": "A1", "node_id": "N1"}]
+        initiators = []
+        for host in await self.get_hosts():
+            for idx in (1, 2):
+                if host["name"] in down or (host["name"] in degraded and idx == 2):
+                    sessions: list[dict[str, Any]] = []
+                else:
+                    sessions = session
+                initiators.append(
+                    {
+                        "id": f"{host['id']}-init-{idx}",
+                        "host_id": host["id"],
+                        "port_name": f"10:00:00:00:c9:{_seed(host['name']) % 90 + 10}:00:0{idx}",
+                        "port_type": "FC",
+                        "active_sessions": sessions,
+                    }
+                )
+        return initiators
+
     async def get_host_volume_mappings(self) -> list[dict[str, Any]]:
         return [
             {

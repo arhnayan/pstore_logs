@@ -384,6 +384,13 @@ class PowerStoreClient:
         }
         return await self._fetch_paged("/host", params=params)
 
+    async def get_initiators(self) -> list[dict[str, Any]]:
+        """Host initiators with their live login sessions (PowerStoreOS 3.0+)."""
+        params = {
+            "select": "id,host_id,port_name,port_type,active_sessions",
+        }
+        return await self._fetch_paged("/initiator", params=params)
+
     async def get_host_volume_mappings(self) -> list[dict[str, Any]]:
         params = {
             "select": "id,host_id,host_group_id,volume_id,logical_unit_number",

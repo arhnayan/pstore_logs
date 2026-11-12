@@ -154,3 +154,17 @@ Output: `dist/pstore-monitor/`
 ## Architecture
 
 Single Python process: FastAPI serves the UI and REST API; a background collector polls the array on configurable intervals and pushes updates to the browser via Server-Sent Events.
+
+## Host connectivity monitor (email alerts)
+
+`host_monitor.py` checks that every PowerStore host is still logged in and emails when one is not. PowerStore has no "host up" flag (`host_connectivity` is config, not status), so it reads `GET /initiator` (PowerStoreOS 3.0+) and treats a host whose initiators all have empty `active_sessions` as DOWN.
+
+```bash
+export PSTORE_USER=admin PSTORE_PASSWORD='...'
+python3 host_monitor.py --cluster 10.0.0.5 --expect-hosts 8 --no-email        # dry run
+python3 host_monitor.py --cluster 10.0.0.5 --expect-hosts 8 \
+  --smtp-host smtp.example.com --mail-from pstore@example.com --mail-to ops@example.com
+PSTORE_MOCK_DOWN=mock-db-01 python3 host_monitor.py --mock --no-email         # simulate an outage
+```
+
+Run it from cron or Task Scheduler every 5 minutes. It mails once when a host goes down, once on recovery, and `--remind-hours N` re-sends while it stays down. Other flags: `--include-degraded` (some initiators lost), `--ignore host1,host2` (maintenance), `--smtp-starttls` / `--smtp-ssl`, SMTP password via `PSTORE_SMTP_PASSWORD`. Exit code 0 = fine, 1 = problem hosts, 2 = array unreachable, so any existing monitoring tool can use it without email. Tests: `python3 -m unittest discover -s tests -t .`
