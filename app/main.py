@@ -19,6 +19,7 @@ from app.routers import (
     datacollection,
     events,
     hardware,
+    hosts,
     metrics,
     nas,
     overview,
@@ -66,6 +67,7 @@ app.include_router(resources.router)
 app.include_router(alerts.router)
 app.include_router(events.router)
 app.include_router(hardware.router)
+app.include_router(hosts.router)
 app.include_router(metrics.router)
 app.include_router(capacity.router)
 app.include_router(storage.router)

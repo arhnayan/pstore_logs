@@ -10,6 +10,7 @@ from app.client import PowerStoreAuthError, create_client
 from app.config import settings
 from app.credentials import clear_credentials, get_credentials, has_credentials, set_credentials
 from app.deps import collector, db
+from app.mailer import EmailConfig, get_email_config, save_email_config, send_email
 from app.locations import DEFAULT_LOCATIONS, ensure_locations
 from app.monitor_target import (
     get_active_cluster_ip,
@@ -39,6 +40,48 @@ class CredentialsPayload(BaseModel):
 
 class ClusterLocationPayload(BaseModel):
     name: str
+
+
+class EmailPayload(BaseModel):
+    host: str
+    port: int = 25
+    security: str = "none"
+    user: str = ""
+    password: str | None = None  # None = keep the stored password
+    sender: str
+    to: str
+
+
+@router.get("/email")
+async def get_email() -> dict:
+    cfg = await get_email_config()
+    return {
+        "host": cfg.host, "port": cfg.port, "security": cfg.security, "user": cfg.user,
+        "sender": cfg.sender, "to": cfg.to, "has_password": bool(cfg.password),
+        "configured": cfg.configured,
+    }
+
+
+@router.put("/email")
+async def put_email(payload: EmailPayload) -> dict:
+    if payload.security not in {"none", "starttls", "ssl"}:
+        raise HTTPException(400, "security must be none, starttls or ssl")
+    cfg = EmailConfig(
+        host=payload.host.strip(), port=payload.port, security=payload.security,
+        user=payload.user.strip(), password=payload.password or "",
+        sender=payload.sender.strip(), to=payload.to.strip(),
+    )
+    await save_email_config(cfg, keep_password=payload.password is None)
+    return await get_email()
+
+
+@router.post("/email/test")
+async def test_email() -> dict:
+    try:
+        await send_email("[PowerStore] Test email", "Host-down alerts will be sent to this address.")
+    except Exception as exc:
+        raise HTTPException(502, f"Email failed: {exc}") from exc
+    return {"ok": True}
 
 
 @router.get("")

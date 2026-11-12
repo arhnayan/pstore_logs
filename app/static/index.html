@@ -22,6 +22,7 @@
     <a href="#alerts" class="nav-link" data-page="alerts">Alerts</a>
     <a href="#events" class="nav-link" data-page="events">Events</a>
     <a href="#hardware" class="nav-link" data-page="hardware">Hardware</a>
+    <a href="#hosts" class="nav-link" data-page="hosts">Hosts</a>
     <a href="#ports" class="nav-link" data-page="ports">Ports</a>
     <a href="#protection" class="nav-link" data-page="protection">Protection</a>
     <a href="#audit" class="nav-link" data-page="audit">Audit</a>
@@ -232,6 +233,17 @@
       <div class="panel"><div id="hardware-table"></div></div>
     </section>
 
+    <section id="page-hosts" class="page">
+      <div class="page-header">
+        <h2>Host Connectivity</h2>
+        <div class="filters"><span id="hosts-checked" class="page-subtitle"></span></div>
+      </div>
+      <div id="host-health-notice"></div>
+      <div class="panel" id="host-health-summary"></div>
+      <div class="panel"><div id="host-health-table"></div></div>
+      <p class="page-subtitle">A host is DOWN when none of its initiators has an active login session; DEGRADED when only some do. A DOWN host sends an email alert. Experimental.</p>
+    </section>
+
     <section id="page-ports" class="page">
       <div class="page-header">
         <h2>Ports</h2>
@@ -366,6 +378,24 @@
           <div style="display:flex;gap:0.5rem;">
             <button type="submit">Save Credentials</button>
             <button type="button" class="secondary" id="clear-credentials">Clear</button>
+          </div>
+        </form>
+      </div>
+      <div class="panel">
+        <div class="panel-header"><h3>Email alerts (host down)</h3></div>
+        <form class="settings-form" id="email-form">
+          <label>SMTP server<input type="text" id="email-host" placeholder="smtp.example.com"></label>
+          <label>Port<input type="number" id="email-port" value="25"></label>
+          <label>Security
+            <select id="email-security"><option value="none">None</option><option value="starttls">STARTTLS</option><option value="ssl">SSL/TLS</option></select>
+          </label>
+          <label>SMTP username (optional)<input type="text" id="email-user" autocomplete="off"></label>
+          <label>SMTP password<input type="password" id="email-password" autocomplete="new-password" placeholder="leave blank to keep saved"></label>
+          <label>From address<input type="text" id="email-sender" placeholder="pstore@example.com"></label>
+          <label>Send to (comma separated)<input type="text" id="email-to" placeholder="ops@example.com, storage@example.com"></label>
+          <div style="display:flex;gap:0.5rem;">
+            <button type="submit">Save Email Settings</button>
+            <button type="button" class="secondary" id="email-test">Send Test Email</button>
           </div>
         </form>
       </div>

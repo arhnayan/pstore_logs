@@ -2,7 +2,7 @@
 
 const MAX_POINTS = 180;
 const state = {
-  alerts: [], events: [], hardware: [], ports: [], metrics: [],
+  alerts: [], events: [], hardware: [], hostHealth: null, ports: [], metrics: [],
   audit: [], collections: [], overview: null, status: {},
   live: null, capacity: null, storage: null, nas: null,
   cluster: null, protection: null, portMetrics: null, resources: null,
@@ -1041,6 +1041,38 @@ async function loadPortMetrics() {
 }
 async function loadAlerts() { state.alerts = (await api('/api/alerts')).items; renderAlerts(); }
 async function loadEvents() { state.events = (await api('/api/events')).items; renderEvents(); }
+async function loadHosts() { state.hostHealth = await api('/api/hosts/health'); renderHosts(); }
+
+function renderHosts() {
+  const h = state.hostHealth;
+  if (!h || !h.items.length) {
+    $('#host-health-summary').innerHTML = '';
+    $('#host-health-table').innerHTML = '<div class="empty">Waiting for host data…</div>';
+    $('#hosts-checked').textContent = '';
+    return;
+  }
+  const c = h.counts || {};
+  const notices = [];
+  if (!h.email_configured) notices.push('Email alerts are not configured — host-down alerts will not be sent. Set them up in Settings.');
+  if (h.alert_error) notices.push('Last alert email failed: ' + h.alert_error);
+  $('#host-health-notice').innerHTML = notices.map(n => `<div class="panel" style="border-color:var(--major);">${escAttr(n)}</div>`).join('');
+  $('#host-health-summary').innerHTML = `<div class="cards">
+    <div class="card"><div class="card-label">Hosts</div><div class="card-value">${h.count}</div></div>
+    <div class="card"><div class="card-label">Up</div><div class="card-value">${c.UP || 0}</div></div>
+    <div class="card"><div class="card-label">Degraded</div><div class="card-value">${c.DEGRADED || 0}</div></div>
+    <div class="card"><div class="card-label">Down</div><div class="card-value">${c.DOWN || 0}</div></div>
+  </div>`;
+  $('#hosts-checked').textContent = h.checked_at ? `Checked ${new Date(h.checked_at).toLocaleTimeString()}` : '';
+  const badge = s => `<span class="badge ${s === 'UP' ? 'up' : s === 'DOWN' ? 'down' : 'unhealthy'}">${s}</span>`;
+  const order = { DOWN: 0, DEGRADED: 1, NO_INITIATORS: 2, UP: 3 };
+  const rows = [...h.items].sort((a, b) => order[a.status] - order[b.status] || a.name.localeCompare(b.name));
+  $('#host-health-table').innerHTML = tableHtml([
+    { key: 'name', label: 'Host' },
+    { key: 'status', label: 'Status', render: r => badge(r.status) },
+    { key: 'detail', label: 'Details', render: r => `<span class="desc-cell">${escAttr(r.detail)}</span>` },
+  ], rows);
+}
+
 async function loadHardware() { state.hardware = (await api('/api/hardware')).items; renderHardware(); }
 async function loadPorts() {
   state.ports = (await api('/api/ports')).items;
@@ -1082,7 +1114,21 @@ function updateClusterLabel(name, clusterIp) {
   }
 }
 
+async function loadEmailSettings() {
+  try {
+    const e = await api('/api/settings/email');
+    $('#email-host').value = e.host || '';
+    $('#email-port').value = e.port || 25;
+    $('#email-security').value = e.security || 'none';
+    $('#email-user').value = e.user || '';
+    $('#email-sender').value = e.sender || '';
+    $('#email-to').value = e.to || '';
+    $('#email-password').placeholder = e.has_password ? 'saved — leave blank to keep' : '';
+  } catch (err) { /* settings page not ready */ }
+}
+
 async function loadSettings() {
+  loadEmailSettings();
   try {
     const data = await api('/api/settings');
     updateClusterLabel(data.monitor_location, data.cluster_ip);
@@ -1530,7 +1576,7 @@ async function loadClusterSeries() {
 async function refreshAll() {
   ensureClusterCharts();
   await Promise.all([
-    loadOverview(), loadResources(), loadAlerts(), loadEvents(), loadHardware(), loadPorts(), loadPortMetrics(),
+    loadOverview(), loadResources(), loadAlerts(), loadEvents(), loadHardware(), loadHosts(), loadPorts(), loadPortMetrics(),
     loadMetrics(), loadLive(), loadCapacity(), loadStorage(), loadNas(), loadAudit(), loadProtection(),
   ]);
   await loadClusterSeries();
@@ -1590,6 +1636,25 @@ function setupSettings() {
       await loadOverview();
     } catch (err) { toast('Save failed: ' + err.message); }
   });
+  $('#email-form')?.addEventListener('submit', async e => {
+    e.preventDefault();
+    try {
+      const pw = $('#email-password').value;
+      await api('/api/settings/email', { method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          host: $('#email-host').value, port: parseInt($('#email-port').value, 10) || 25,
+          security: $('#email-security').value, user: $('#email-user').value,
+          password: pw === '' ? null : pw, sender: $('#email-sender').value, to: $('#email-to').value,
+        }) });
+      $('#email-password').value = '';
+      toast('Email settings saved');
+      await loadEmailSettings();
+    } catch (err) { toast('Save failed: ' + err.message); }
+  });
+  $('#email-test')?.addEventListener('click', async () => {
+    try { await api('/api/settings/email/test', { method: 'POST' }); toast('Test email sent'); }
+    catch (err) { toast(err.message); }
+  });
   $('#clear-credentials')?.addEventListener('click', async () => { await api('/api/settings/credentials', { method: 'DELETE' }); toast('Credentials cleared'); await loadOverview(); });
 }
 
@@ -1637,6 +1702,7 @@ function setupSSE() {
       else if (msg.type === 'alerts') { loadAlerts().then(() => loadOverview()); }
       else if (msg.type === 'events') loadEvents();
       else if (msg.type === 'hardware') { loadHardware(); loadPorts(); loadOverview(); loadResources(); }
+      else if (msg.type === 'host_health') loadHosts();
       else if (msg.type === 'perf') { loadLive(); loadClusterSeries(); loadResources(); }
       else if (msg.type === 'space') { loadCapacity(); loadOverview(); loadStorage(); loadResources(); }
       else if (msg.type === 'inventory') { loadStorage(); loadNas(); }

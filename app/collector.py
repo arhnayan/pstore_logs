@@ -11,6 +11,8 @@ from app.client import PowerStoreAuthError, PowerStoreClient, create_client
 from app.config import settings
 from app.credentials import get_credentials
 from app.db import Database, utc_now
+from app.host_health import DOWN, evaluate_hosts
+from app.mailer import send_email
 from app.monitor_target import get_active_cluster_ip, get_monitor_location_name
 from app.notify import notify_critical
 
@@ -54,6 +56,10 @@ class Collector:
         self._cluster_id: str | None = None
         self._appliance_ids: list[str] = []
         self._node_ids: list[str] = []
+        self.host_health: list[dict[str, Any]] = []
+        self.host_health_checked_at: str | None = None
+        self._hosts_down_notified: set[str] = set()
+        self.host_alert_error: str | None = None
 
     async def start(self) -> None:
         if settings.mock:
@@ -75,6 +81,7 @@ class Collector:
             ("port_perf", settings.poll_port_perf_sec, self._poll_port_perf, 10),
             ("object_space", settings.poll_object_space_sec, self._poll_object_space, 11),
             ("protection", settings.poll_protection_sec, self._poll_protection, 12),
+            ("host_health", settings.poll_host_health_sec, self._poll_host_health, 13),
         ]
         for name, interval, fn, stagger in loops:
             self._tasks.append(asyncio.create_task(self._run_loop(name, interval, fn, stagger)))
@@ -253,6 +260,39 @@ class Collector:
             {"hardware": len(hardware), "fc_ports": len(fc_ports), "eth_ports": len(eth_ports)},
         )
         return len(hardware) + len(fc_ports) + len(eth_ports)
+
+    async def _poll_host_health(self) -> int:
+        hosts = await self._client.get_hosts()
+        initiators = await self._client.get_initiators()
+        results = evaluate_hosts(hosts, initiators)
+        self.host_health = [
+            {**h.__dict__, "detail": h.detail()} for h in results
+        ]
+        self.host_health_checked_at = utc_now()
+        down = {h.name for h in results if h.status == DOWN}
+        new = sorted(down - self._hosts_down_notified)
+        recovered = sorted(self._hosts_down_notified - down)
+        if new or recovered:
+            cluster = self._client.cluster_ip or "cluster"
+            subject = (
+                f"[PowerStore {cluster}] ALERT: {len(new)} host(s) DOWN" if new
+                else f"[PowerStore {cluster}] RECOVERED: hosts back online"
+            )
+            lines = []
+            if new:
+                lines += ["HOSTS DOWN (no active initiator sessions):", *(f"  - {n}" for n in new), ""]
+            if recovered:
+                lines += ["RECOVERED:", *(f"  - {n}" for n in recovered), ""]
+            lines += ["Current status:", *(f"  {h.name:<24} {h.status:<13} {h.detail()}" for h in results)]
+            try:
+                await send_email(subject, "\n".join(lines))
+                self._hosts_down_notified = down  # only after the mail went out
+                self.host_alert_error = None
+            except Exception as exc:  # retried on the next poll
+                self.host_alert_error = str(exc)
+                logger.warning("Host alert email failed: %s", exc)
+        await self.bus.publish("host_health", {"hosts": len(results), "down": len(down)})
+        return len(results)
 
     async def _poll_perf_fast(self) -> int:
         await self._refresh_entity_ids()

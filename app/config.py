@@ -33,6 +33,7 @@ class Settings:
     poll_alerts_sec: int = 5
     poll_events_sec: int = 15
     poll_hardware_sec: int = 60
+    poll_host_health_sec: int = 30
     poll_perf_fast_sec: int = 20
     poll_space_sec: int = 60
     poll_inventory_sec: int = 60
