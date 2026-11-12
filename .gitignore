@@ -5,5 +5,5 @@ __pycache__/
 build/
 dist/
 *.spec.bak
-vodafone-raport-2/
+vodafone-rapor-2/
 samples/
