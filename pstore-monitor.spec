@@ -1,5 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+import os
+
 from PyInstaller.utils.hooks import collect_submodules
 
 block_cipher = None
@@ -19,16 +21,23 @@ hiddenimports = (
     ]
 )
 
+datas = [
+    ("app/static", "app/static"),
+    ("app/reports/vodafone_theme.xml", "app/reports"),
+]
+# Optional report data; the vodafone-rapor-2 folder is not in git, so CI builds skip it.
+for src, dest in [
+    ("vodafone-rapor-2/raw_report_csv", "report_csv"),
+    ("vodafone-rapor-2/formatted_report_csv", "report_capacity_csv"),
+]:
+    if os.path.isdir(src):
+        datas.append((src, dest))
+
 a = Analysis(
     ["run_standalone.py"],
     pathex=[],
     binaries=[],
-    datas=[
-        ("app/static", "app/static"),
-        ("app/reports/vodafone_theme.xml", "app/reports"),
-        ("vodafone-rapor-2/raw_report_csv", "report_csv"),
-        ("vodafone-rapor-2/formatted_report_csv", "report_capacity_csv"),
-    ],
+    datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},

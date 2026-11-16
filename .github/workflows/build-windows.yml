@@ -2,6 +2,8 @@ name: Build Windows
 
 on:
   push:
+    branches:
+      - unstable
     tags:
       - "v*"
   workflow_dispatch:
