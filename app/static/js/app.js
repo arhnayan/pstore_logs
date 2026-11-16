@@ -148,7 +148,7 @@ function tableHtml(headers, rows, opts = {}) {
     return `<th${cls}>${h.label}</th>`;
   }).join('');
   const body = rows.map(row =>
-    `<tr${opts.rowClass && opts.rowClass(row) ? ` class="${opts.rowClass(row)}"` : ''}>${headers.map(h => `<td>${h.render ? h.render(row) : (row[h.key] ?? '—')}</td>`).join('')}</tr>`
+    `<tr>${headers.map(h => `<td>${h.render ? h.render(row) : (row[h.key] ?? '—')}</td>`).join('')}</tr>`
   ).join('');
   const cls = tableClass ? ` class="${tableClass}"` : '';
   return `<table${cls}><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
@@ -1066,13 +1066,26 @@ function renderHosts() {
   const badge = s => `<span class="badge ${s === 'UP' ? 'up' : s === 'DOWN' ? 'down' : 'unhealthy'}">${s}</span>`;
   const order = { DOWN: 0, DEGRADED: 1, NO_INITIATORS: 2, UP: 3 };
   const rows = [...h.items].sort((a, b) => order[a.status] - order[b.status] || a.name.localeCompare(b.name));
-  $('#host-health-table').innerHTML = tableHtml([
-    { key: 'name', label: 'Host' },
-    { key: 'status', label: 'Status', render: r => badge(r.status) },
-    { key: 'active_sessions', label: 'Active Sessions', render: r => r.status === 'NO_INITIATORS' ? '—' : r.active_sessions },
-    { key: 'detail', label: 'Details', render: r => `<span class="desc-cell">${escAttr(r.detail)}</span>` },
-  ], rows, { rowClass: r => (r.low_sessions || r.status === 'DOWN') ? 'row-alert' : '' });
+  const alertRow = r => r.low_sessions || r.status === 'DOWN';
+  const sessionLine = x => Object.entries(x).map(([k, v]) =>
+    `<span class="sess-kv"><span class="sess-k">${escAttr(k.replace(/_/g, ' '))}</span> ${escAttr(Array.isArray(v) ? v.join(', ') : String(v))}</span>`).join('');
+  const detailHtml = r => !r.initiators.length ? '<div class="empty">No initiators</div>' : r.initiators.map(i => `
+    <div class="sess-init"><strong>${escAttr(i.port_name)}</strong> <span class="page-subtitle">${escAttr(i.port_type || '')} · ${i.sessions.length} session${i.sessions.length === 1 ? '' : 's'}</span>
+    ${i.sessions.length ? i.sessions.map(x => `<div class="sess-line">${sessionLine(x)}</div>`).join('') : '<div class="sess-line">No active sessions</div>'}</div>`).join('');
+  const open = state.hostExpanded || (state.hostExpanded = new Set());
+  $('#host-health-table').innerHTML = `<table><thead><tr><th></th><th>Host</th><th>Status</th><th>Active Sessions</th><th>Details</th></tr></thead><tbody>${rows.map(r => `
+    <tr class="host-row${alertRow(r) ? ' row-alert' : ''}" data-host="${escAttr(r.host_id)}" style="cursor:pointer">
+      <td>${open.has(r.host_id) ? '▾' : '▸'}</td><td>${escAttr(r.name)}</td><td>${badge(r.status)}</td>
+      <td>${r.status === 'NO_INITIATORS' ? '—' : r.active_sessions}</td><td><span class="desc-cell">${escAttr(r.detail)}</span></td></tr>
+    ${open.has(r.host_id) ? `<tr class="host-detail"><td></td><td colspan="4">${detailHtml(r)}</td></tr>` : ''}`).join('')}</tbody></table>`;
 }
+document.addEventListener('click', e => {
+  const tr = e.target.closest('#host-health-table tr.host-row');
+  if (!tr) return;
+  const set = state.hostExpanded || (state.hostExpanded = new Set());
+  set.has(tr.dataset.host) ? set.delete(tr.dataset.host) : set.add(tr.dataset.host);
+  renderHosts();
+});
 
 async function loadHardware() { state.hardware = (await api('/api/hardware')).items; renderHardware(); }
 async function loadPorts() {

@@ -678,3 +678,8 @@ tr:hover td { background: var(--bg-hover); }
 }
 
 tr.row-alert td { background: rgba(255,71,87,0.18); color: var(--critical); }
+tr.host-detail:hover td { background: transparent; }
+.sess-init { margin: 4px 0 10px; }
+.sess-line { margin: 2px 0 2px 12px; font-size: 12px; color: var(--text-secondary, #8b949e); }
+.sess-kv { margin-right: 14px; }
+.sess-k { opacity: .7; }

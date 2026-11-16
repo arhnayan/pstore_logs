@@ -31,6 +31,7 @@ class HostHealth:
     initiators_logged_in: int = 0
     missing_ports: list[str] = field(default_factory=list)
     active_sessions: int = 0
+    initiators: list[dict[str, Any]] = field(default_factory=list)
 
     @property
     def low_sessions(self) -> bool:
@@ -39,7 +40,7 @@ class HostHealth:
     def detail(self) -> str:
         if self.status == NO_INITIATORS:
             return "host has no initiators registered"
-        text = f"{self.active_sessions} active sessions, {self.initiators_logged_in}/{self.initiators_total} initiators logged in"
+        text = f"{self.initiators_logged_in}/{self.initiators_total} initiators logged in"
         if self.missing_ports and self.status != UP:
             text += f" (no session: {', '.join(self.missing_ports)})"
         return text
@@ -76,6 +77,17 @@ def evaluate_hosts(
                 initiators_total=len(own),
                 initiators_logged_in=len(up),
                 missing_ports=missing,
+                initiators=[
+                    {
+                        "port_name": i.get("port_name", "?"),
+                        "port_type": i.get("port_type"),
+                        "sessions": [
+                            {k: v for k, v in (sess or {}).items() if v not in (None, [], "")}
+                            for sess in (i.get("active_sessions") or [])
+                        ],
+                    }
+                    for i in own
+                ],
                 active_sessions=sum(len(i.get("active_sessions") or []) for i in own),
             )
         )
