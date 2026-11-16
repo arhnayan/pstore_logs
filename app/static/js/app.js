@@ -148,7 +148,7 @@ function tableHtml(headers, rows, opts = {}) {
     return `<th${cls}>${h.label}</th>`;
   }).join('');
   const body = rows.map(row =>
-    `<tr>${headers.map(h => `<td>${h.render ? h.render(row) : (row[h.key] ?? '—')}</td>`).join('')}</tr>`
+    `<tr${opts.rowClass && opts.rowClass(row) ? ` class="${opts.rowClass(row)}"` : ''}>${headers.map(h => `<td>${h.render ? h.render(row) : (row[h.key] ?? '—')}</td>`).join('')}</tr>`
   ).join('');
   const cls = tableClass ? ` class="${tableClass}"` : '';
   return `<table${cls}><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
@@ -1069,8 +1069,9 @@ function renderHosts() {
   $('#host-health-table').innerHTML = tableHtml([
     { key: 'name', label: 'Host' },
     { key: 'status', label: 'Status', render: r => badge(r.status) },
+    { key: 'active_sessions', label: 'Active Sessions', render: r => r.status === 'NO_INITIATORS' ? '—' : r.active_sessions },
     { key: 'detail', label: 'Details', render: r => `<span class="desc-cell">${escAttr(r.detail)}</span>` },
-  ], rows);
+  ], rows, { rowClass: r => (r.low_sessions || r.status === 'DOWN') ? 'row-alert' : '' });
 }
 
 async function loadHardware() { state.hardware = (await api('/api/hardware')).items; renderHardware(); }

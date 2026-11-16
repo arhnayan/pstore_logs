@@ -676,3 +676,5 @@ tr:hover td { background: var(--bg-hover); }
 .huseyin-special:has(input:checked) span::after {
   content: " ✨";
 }
+
+tr.row-alert td { background: rgba(255,71,87,0.18); color: var(--critical); }

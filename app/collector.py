@@ -11,7 +11,7 @@ from app.client import PowerStoreAuthError, PowerStoreClient, create_client
 from app.config import settings
 from app.credentials import get_credentials
 from app.db import Database, utc_now
-from app.host_health import DOWN, evaluate_hosts
+from app.host_health import MIN_ACTIVE_SESSIONS, evaluate_hosts
 from app.mailer import send_email
 from app.monitor_target import get_active_cluster_ip, get_monitor_location_name
 from app.notify import notify_critical
@@ -266,10 +266,10 @@ class Collector:
         initiators = await self._client.get_initiators()
         results = evaluate_hosts(hosts, initiators)
         self.host_health = [
-            {**h.__dict__, "detail": h.detail()} for h in results
+            {**h.__dict__, "detail": h.detail(), "low_sessions": h.low_sessions} for h in results
         ]
         self.host_health_checked_at = utc_now()
-        down = {h.name for h in results if h.status == DOWN}
+        down = {h.name for h in results if h.low_sessions or h.status == "DOWN"}
         new = sorted(down - self._hosts_down_notified)
         recovered = sorted(self._hosts_down_notified - down)
         if new or recovered:
@@ -280,7 +280,7 @@ class Collector:
             )
             lines = []
             if new:
-                lines += ["HOSTS DOWN (no active initiator sessions):", *(f"  - {n}" for n in new), ""]
+                lines += [f"HOSTS DOWN or below {MIN_ACTIVE_SESSIONS} active sessions:", *(f"  - {n}" for n in new), ""]
             if recovered:
                 lines += ["RECOVERED:", *(f"  - {n}" for n in recovered), ""]
             lines += ["Current status:", *(f"  {h.name:<24} {h.status:<13} {h.detail()}" for h in results)]
