@@ -11,7 +11,7 @@ from app.client import PowerStoreAuthError, PowerStoreClient, create_client
 from app.config import settings
 from app.credentials import get_credentials
 from app.db import Database, utc_now
-from app.host_health import MIN_ACTIVE_SESSIONS, evaluate_hosts
+from app.host_health import MIN_ACTIVE_SESSIONS, build_lookup, evaluate_hosts
 from app.mailer import send_email
 from app.monitor_target import get_active_cluster_ip, get_monitor_location_name
 from app.notify import notify_critical
@@ -264,7 +264,16 @@ class Collector:
     async def _poll_host_health(self) -> int:
         hosts = await self._client.get_hosts()
         initiators = await self._client.get_initiators()
-        results = evaluate_hosts(hosts, initiators)
+        try:  # friendly node/port names; fall back to raw ids if unavailable
+            lookup = build_lookup(
+                await self._client.get_nodes(),
+                await self._client.get_appliances(),
+                await self._client.get_fc_ports() + await self._client.get_eth_ports(),
+            )
+        except Exception as exc:
+            logger.warning("Host session name lookup failed: %s", exc)
+            lookup = None
+        results = evaluate_hosts(hosts, initiators, lookup)
         self.host_health = [
             {**h.__dict__, "detail": h.detail(), "low_sessions": h.low_sessions} for h in results
         ]

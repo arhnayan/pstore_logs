@@ -1067,11 +1067,23 @@ function renderHosts() {
   const order = { DOWN: 0, DEGRADED: 1, NO_INITIATORS: 2, UP: 3 };
   const rows = [...h.items].sort((a, b) => order[a.status] - order[b.status] || a.name.localeCompare(b.name));
   const alertRow = r => r.low_sessions || r.status === 'DOWN';
-  const sessionLine = x => Object.entries(x).map(([k, v]) =>
-    `<span class="sess-kv"><span class="sess-k">${escAttr(k.replace(/_/g, ' '))}</span> ${escAttr(Array.isArray(v) ? v.join(', ') : String(v))}</span>`).join('');
-  const detailHtml = r => !r.initiators.length ? '<div class="empty">No initiators</div>' : r.initiators.map(i => `
+  const sessionLine = x => [
+    x.port ? `<span class="sess-kv"><span class="sess-k">port</span> ${escAttr(x.port)}</span>` : '',
+    x.target ? `<span class="sess-kv"><span class="sess-k">target</span> ${escAttr(x.target)}</span>` : '',
+    x.addresses ? `<span class="sess-kv"><span class="sess-k">addresses</span> ${escAttr(x.addresses.join(', '))}</span>` : '',
+  ].join('') || '<span class="sess-k">no port info</span>';
+  const groupByNode = sessions => {
+    const g = {};
+    sessions.forEach(x => (g[x.node] = g[x.node] || []).push(x));
+    return Object.entries(g).sort(([a], [b]) => a.localeCompare(b));
+  };
+  const detailHtml = r => !r.initiators.length ? '<div class="empty">No initiators</div>' : `
+    <div class="sess-summary">${Object.entries(r.by_node || {}).map(([n, c]) => `<span class="sess-kv"><strong>${escAttr(n)}</strong>: ${c}</span>`).join('') || 'No active sessions'}</div>` +
+    r.initiators.map(i => `
     <div class="sess-init"><strong>${escAttr(i.port_name)}</strong> <span class="page-subtitle">${escAttr(i.port_type || '')} · ${i.sessions.length} session${i.sessions.length === 1 ? '' : 's'}</span>
-    ${i.sessions.length ? i.sessions.map(x => `<div class="sess-line">${sessionLine(x)}</div>`).join('') : '<div class="sess-line">No active sessions</div>'}</div>`).join('');
+    ${i.sessions.length ? groupByNode(i.sessions).map(([node, list]) => `
+      <div class="sess-line"><strong>${escAttr(node)}</strong> (${list.length})
+        ${list.map(x => `<div class="sess-line">${sessionLine(x)}</div>`).join('')}</div>`).join('') : '<div class="sess-line">No active sessions</div>'}</div>`).join('');
   const open = state.hostExpanded || (state.hostExpanded = new Set());
   $('#host-health-table').innerHTML = `<table><thead><tr><th></th><th>Host</th><th>Status</th><th>Active Sessions</th><th>Details</th></tr></thead><tbody>${rows.map(r => `
     <tr class="host-row${alertRow(r) ? ' row-alert' : ''}" data-host="${escAttr(r.host_id)}" style="cursor:pointer">

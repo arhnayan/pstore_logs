@@ -294,7 +294,12 @@ class MockPowerStoreClient(PowerStoreClient):
 
         down = {n.strip() for n in os.environ.get("PSTORE_MOCK_DOWN", "").split(",") if n.strip()}
         degraded = {n.strip() for n in os.environ.get("PSTORE_MOCK_DEGRADED", "").split(",") if n.strip()}
-        session = [{"port_name": "58:cc:f0:90:49:20:00:01", "appliance_id": "A1", "node_id": "N1"}]
+        # 4 sessions per initiator (2 per node) -> 8 per healthy host, like a real array.
+        session = [
+            {"port_name": f"58:cc:f0:90:49:20:00:0{n}", "appliance_id": "mock-appliance-a",
+             "node_id": f"mock-node-{'a' if n % 2 else 'b'}", "fc_port_id": f"mock-fc-{n % 2 ^ 1}"}
+            for n in range(1, 5)
+        ]
         initiators = []
         for host in await self.get_hosts():
             for idx in (1, 2):

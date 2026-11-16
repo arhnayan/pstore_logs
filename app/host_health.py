@@ -32,6 +32,7 @@ class HostHealth:
     missing_ports: list[str] = field(default_factory=list)
     active_sessions: int = 0
     initiators: list[dict[str, Any]] = field(default_factory=list)
+    by_node: dict[str, int] = field(default_factory=dict)
 
     @property
     def low_sessions(self) -> bool:
@@ -46,11 +47,49 @@ class HostHealth:
         return text
 
 
+def build_lookup(
+    nodes: list[dict[str, Any]],
+    appliances: list[dict[str, Any]],
+    ports: list[dict[str, Any]],
+) -> dict[str, dict[str, str]]:
+    """Friendly names for the ids that appear inside active_sessions."""
+    app_names = {a["id"]: a.get("name") or a["id"] for a in appliances}
+    node_names: dict[str, str] = {}
+    for n in nodes:
+        slot = n.get("slot")
+        letter = "AB"[slot] if slot in (0, 1) else str(slot if slot is not None else "?")
+        node_names[n["id"]] = f"{app_names.get(n.get('appliance_id'), n.get('appliance_id') or '?')} / Node {letter}"
+    return {"nodes": node_names, "ports": {p["id"]: p.get("name") or p["id"] for p in ports}}
+
+
+def _describe_session(sess: dict[str, Any], lookup: dict[str, dict[str, str]]) -> dict[str, Any]:
+    node_id = sess.get("node_id")
+    node = lookup["nodes"].get(node_id, node_id or "unknown node")
+    port_id = next((sess.get(k) for k in ("fc_port_id", "eth_port_id", "veth_id", "bond_id") if sess.get(k)), None)
+    return {
+        "node": node,
+        "port": lookup["ports"].get(port_id, port_id) if port_id else None,
+        "target": sess.get("port_name"),
+        "addresses": sess.get("nvme_transport_addresses") or None,
+    }
+
+
+def _count_by_node(own: list[dict[str, Any]], lookup: dict[str, dict[str, str]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for i in own:
+        for sess in i.get("active_sessions") or []:
+            node = _describe_session(sess or {}, lookup)["node"]
+            counts[node] = counts.get(node, 0) + 1
+    return dict(sorted(counts.items()))
+
+
 def evaluate_hosts(
     hosts: list[dict[str, Any]],
     initiators: list[dict[str, Any]],
+    lookup: dict[str, dict[str, str]] | None = None,
 ) -> list[HostHealth]:
     """Classify every host from the /host and /initiator listings."""
+    lookup = lookup or {"nodes": {}, "ports": {}}
     by_host: dict[str, list[dict[str, Any]]] = {}
     for initiator in initiators:
         by_host.setdefault(initiator.get("host_id") or "", []).append(initiator)
@@ -82,12 +121,13 @@ def evaluate_hosts(
                         "port_name": i.get("port_name", "?"),
                         "port_type": i.get("port_type"),
                         "sessions": [
-                            {k: v for k, v in (sess or {}).items() if v not in (None, [], "")}
+                            _describe_session(sess or {}, lookup)
                             for sess in (i.get("active_sessions") or [])
                         ],
                     }
                     for i in own
                 ],
+                by_node=_count_by_node(own, lookup),
                 active_sessions=sum(len(i.get("active_sessions") or []) for i in own),
             )
         )
