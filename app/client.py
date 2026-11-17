@@ -384,6 +384,24 @@ class PowerStoreClient:
         }
         return await self._fetch_paged("/host", params=params)
 
+    async def create_host(self, name: str, initiator: str, *, os_type: str = "ESXi", port_type: str = "NVMe") -> str:
+        """Create a host with one initiator; returns the new host id."""
+        resp = await self._request(
+            "POST",
+            "/host",
+            json={
+                "name": name,
+                "os_type": os_type,
+                "initiators": [{"port_name": initiator, "port_type": port_type}],
+            },
+        )
+        if resp.status_code not in (200, 201):
+            raise PowerStoreError(parse_error_response(resp))
+        try:
+            return str(resp.json().get("id", ""))
+        except ValueError:
+            return ""
+
     async def get_initiators(self) -> list[dict[str, Any]]:
         """Host initiators with their live login sessions (PowerStoreOS 3.0+)."""
         params = {

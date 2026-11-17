@@ -1069,7 +1069,6 @@ function renderHosts() {
   const alertRow = r => r.low_sessions || r.status === 'DOWN';
   const sessionLine = x => [
     x.port ? `<span class="sess-kv"><span class="sess-k">port</span> ${escAttr(x.port)}</span>` : '',
-    x.target ? `<span class="sess-kv"><span class="sess-k">target</span> ${escAttr(x.target)}</span>` : '',
     x.addresses ? `<span class="sess-kv"><span class="sess-k">addresses</span> ${escAttr(x.addresses.join(', '))}</span>` : '',
   ].join('') || '<span class="sess-k">no port info</span>';
   const groupByNode = sessions => {
@@ -1098,6 +1097,81 @@ document.addEventListener('click', e => {
   set.has(tr.dataset.host) ? set.delete(tr.dataset.host) : set.add(tr.dataset.host);
   renderHosts();
 });
+
+// ---- Mass host creation ----
+const bulk = { previewed: null };
+
+function bulkRender(data, created) {
+  const badge = { new: 'unhealthy', created: 'up', exists: 'unhealthy', invalid: 'down', failed: 'down' };
+  const label = { new: created ? 'new' : 'will create', created: 'created', exists: 'skipped', invalid: 'invalid', failed: 'failed' };
+  $('#bulk-result').innerHTML = `<table><thead><tr><th>Host name</th><th>Initiator (NVMe)</th><th>OS</th><th>Result</th></tr></thead><tbody>${data.items.map(r => `
+    <tr><td>${escAttr(r.name)}</td><td>${escAttr(r.initiator)}</td><td>ESXi</td>
+    <td><span class="badge ${badge[r.status] || ''}">${label[r.status] || r.status}</span>${r.detail ? ` <span class="desc-cell">${escAttr(r.detail)}</span>` : ''}</td></tr>`).join('')}</tbody></table>`;
+}
+
+function bulkPayload(dry_run) {
+  return { location: $('#bulk-location').value, server: $('#bulk-server').value, hosts: $('#bulk-input').value, dry_run };
+}
+
+function bulkInvalidate() {
+  bulk.previewed = null;
+  $('#bulk-create').disabled = true;
+}
+
+async function bulkFillLocations() {
+  if (!state.reportLocations.length) {
+    try { state.reportLocations = (await api('/api/reports/locations')).locations || []; } catch { return; }
+  }
+  const sel = $('#bulk-location');
+  if (sel.options.length) return;
+  sel.innerHTML = state.reportLocations.filter(l => l.enabled !== false)
+    .map(l => `<option>${escAttr(l.name)}</option>`).join('');
+  bulkFillServers();
+}
+
+function bulkFillServers() {
+  const loc = state.reportLocations.find(l => l.name === $('#bulk-location').value);
+  $('#bulk-server').innerHTML = (loc?.servers || []).map(s => `<option value="${escAttr(s)}">${escAttr(s)}${loc.server_ips?.[s] ? ' · ' + escAttr(loc.server_ips[s]) : ''}</option>`).join('');
+}
+
+async function bulkRun(dryRun) {
+  const status = $('#bulk-status');
+  const buttons = [$('#bulk-preview'), $('#bulk-create')];
+  buttons.forEach(b => { b.disabled = true; });
+  status.textContent = dryRun ? 'Checking…' : 'Creating…';
+  try {
+    const data = await api('/api/hosts/bulk', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(bulkPayload(dryRun)) });
+    bulkRender(data, !dryRun);
+    const c = data.counts || {};
+    if (dryRun) {
+      bulk.previewed = JSON.stringify(bulkPayload(true));
+      status.textContent = `${data.server} (${data.mgmt_ip}): ${c.new || 0} to create, ${c.exists || 0} already exist, ${c.invalid || 0} invalid`;
+    } else {
+      bulkInvalidate();
+      status.textContent = `${data.server}: ${c.created || 0} created, ${c.exists || 0} skipped, ${(c.failed || 0) + (c.invalid || 0)} failed`;
+      toast(`${c.created || 0} host(s) created on ${data.server}`);
+      loadHosts().catch(() => {});
+    }
+  } catch (e) {
+    status.textContent = e.message;
+    bulkInvalidate();
+  } finally {
+    $('#bulk-preview').disabled = false;
+    $('#bulk-create').disabled = !bulk.previewed;
+  }
+}
+
+function setupBulkHosts() {
+  bulkFillLocations();
+  $('#bulk-location').addEventListener('change', () => { bulkFillServers(); bulkInvalidate(); });
+  $('#bulk-server').addEventListener('change', bulkInvalidate);
+  $('#bulk-input').addEventListener('input', bulkInvalidate);
+  $('#bulk-preview').addEventListener('click', () => bulkRun(true));
+  $('#bulk-create').addEventListener('click', () => {
+    if (!bulk.previewed || bulk.previewed !== JSON.stringify(bulkPayload(true))) { bulkInvalidate(); return; }
+    bulkRun(false);
+  });
+}
 
 async function loadHardware() { state.hardware = (await api('/api/hardware')).items; renderHardware(); }
 async function loadPorts() {
@@ -1745,7 +1819,7 @@ function setupSSE() {
 }
 
 async function init() {
-  setupNav(); setupFilters(); setupSettings(); setupSupport(); setupReports(); setupSSE();
+  setupNav(); setupBulkHosts(); setupFilters(); setupSettings(); setupSupport(); setupReports(); setupSSE();
   ensureClusterCharts();
   await loadSettings();
   await refreshAll();

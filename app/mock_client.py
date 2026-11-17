@@ -25,6 +25,9 @@ def _seed(text: str) -> int:
     return total
 
 
+_CREATED_HOSTS: list[dict[str, Any]] = []  # hosts "created" in mock mode, shared across clients
+
+
 class MockPowerStoreClient(PowerStoreClient):
     """Returns a small stable cluster so the UI and reports can run offline."""
 
@@ -268,7 +271,7 @@ class MockPowerStoreClient(PowerStoreClient):
         return volumes
 
     async def get_hosts(self) -> list[dict[str, Any]]:
-        return [
+        return [{k: v for k, v in h.items() if not k.startswith("_")} for h in _CREATED_HOSTS] + [
             {
                 "id": "mock-host-1",
                 "name": "mock-esx-01",
@@ -287,6 +290,14 @@ class MockPowerStoreClient(PowerStoreClient):
             },
         ]
 
+    async def create_host(self, name: str, initiator: str, *, os_type: str = "ESXi", port_type: str = "NVMe") -> str:
+        host_id = f"mock-host-new-{len(_CREATED_HOSTS) + 1}"
+        _CREATED_HOSTS.append({
+            "id": host_id, "name": name, "os_type": os_type, "host_connectivity": "Local_Only",
+            "host_group_id": None, "description": "", "_initiator": initiator, "_port_type": port_type,
+        })
+        return host_id
+
     async def get_initiators(self) -> list[dict[str, Any]]:
         """Two FC initiators per host. Hosts named in PSTORE_MOCK_DOWN (comma
         separated) have no sessions; PSTORE_MOCK_DEGRADED loses one initiator."""
@@ -301,7 +312,15 @@ class MockPowerStoreClient(PowerStoreClient):
             for n in range(1, 5)
         ]
         initiators = []
+        for created in _CREATED_HOSTS:
+            initiators.append({
+                "id": f"{created['id']}-init-1", "host_id": created["id"],
+                "port_name": created["_initiator"], "port_type": created["_port_type"],
+                "active_sessions": [],
+            })
         for host in await self.get_hosts():
+            if host["id"].startswith("mock-host-new-"):
+                continue
             for idx in (1, 2):
                 if host["name"] in down or (host["name"] in degraded and idx == 2):
                     sessions: list[dict[str, Any]] = []

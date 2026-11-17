@@ -238,6 +238,21 @@
         <h2>Host Connectivity</h2>
         <div class="filters"><span id="hosts-checked" class="page-subtitle"></span></div>
       </div>
+      <div class="panel" id="bulk-hosts">
+        <div class="panel-header"><h3>Create hosts</h3></div>
+        <p class="page-subtitle">Pick a location and machine, then paste the host FQDNs (comma or line separated). Each one becomes a host named after its first label (uppercase), OS <strong>ESXi</strong>, with one <strong>NVMe</strong> initiator whose NQN is built as <code>nqn.2014-08.local.vodafone:nvme:&lt;name&gt;</code>. Pasting NQNs directly also works.</p>
+        <div class="filters" style="margin-bottom:0.75rem;">
+          <select id="bulk-location"></select>
+          <select id="bulk-server"></select>
+        </div>
+        <textarea id="bulk-input" rows="5" style="width:100%;" placeholder="adntocesxrm36.vodafone.local, adntocesxrm37.vodafone.local&#10;adntocesxrm38.vodafone.local"></textarea>
+        <div class="filters" style="margin-top:0.75rem;">
+          <button type="button" id="bulk-preview">Preview</button>
+          <button type="button" id="bulk-create" disabled>Create hosts</button>
+          <span id="bulk-status" class="page-subtitle"></span>
+        </div>
+        <div id="bulk-result"></div>
+      </div>
       <div id="host-health-notice"></div>
       <div class="panel" id="host-health-summary"></div>
       <div class="panel"><div id="host-health-table"></div></div>
