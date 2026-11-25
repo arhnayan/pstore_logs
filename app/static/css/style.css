@@ -684,3 +684,5 @@ tr.host-detail:hover td { background: transparent; }
 .sess-kv { margin-right: 14px; }
 .sess-k { opacity: .7; }
 .sess-summary { margin: 4px 0 8px; font-size: 13px; }
+
+[hidden] { display: none !important; }

@@ -1103,7 +1103,7 @@ document.addEventListener('click', e => {
 // ---- Mass host creation ----
 const bulk = { previewed: null, lastUser: '', data: null, sel: new Set(), results: {}, busy: false };
 
-const bulkBadge = { new: 'unhealthy', created: 'up', exists: 'unhealthy', invalid: 'down', failed: 'down', mapped: 'up', unmapped: 'up', deleted: 'up', skipped: 'unhealthy' };
+const bulkBadge = { new: 'unhealthy', created: 'up', exists: 'unhealthy', invalid: 'down', failed: 'down', mapped: 'up', unmapped: 'up', deleted: 'up', to_delete: 'down', skipped: 'unhealthy' };
 
 // A row can be ticked when it is an existing host that is not part of a host group.
 function bulkSelectable(r) { return r.status === 'exists' && r.host_id && !r.host_group_id; }
@@ -1117,7 +1117,7 @@ function bulkVgCell(r) {
 
 function bulkRender(data, created) {
   bulk.data = data;
-  const label = { new: created ? 'new' : 'will create', created: 'created', exists: created ? 'skipped' : 'exists', invalid: 'invalid', failed: 'failed' };
+  const label = { new: created ? 'new' : 'will create', created: 'created', exists: created ? 'skipped' : 'exists', invalid: 'invalid', failed: 'failed', to_delete: 'will delete' };
   const mapMode = !created && data.volume_groups;
   const rows = data.items;
   const selectable = rows.filter(bulkSelectable);
@@ -1151,8 +1151,7 @@ function bulkUpdateSelection() {
   const ok = n > 0 && !!$('#bulk-vg').value && !bulk.busy;
   $('#bulk-map-btn').disabled = !ok;
   $('#bulk-unmap-btn').disabled = !ok;
-  $('#bulk-delete-btn').disabled = !n || bulk.busy;
-  $('#bulk-sel-count').textContent = n ? `${n} host(s) selected` : 'Tick hosts to map, unmap or delete';
+  $('#bulk-sel-count').textContent = n ? `${n} host(s) selected` : 'Tick hosts to map or unmap';
 }
 
 function bulkPayload(dry_run) {
@@ -1213,7 +1212,7 @@ function bulkAskWriteAccount(message = '', opts = {}) {
 
 async function bulkRun(dryRun, account = null, message = '', keep = false) {
   const status = $('#bulk-status');
-  const buttons = [$('#bulk-preview'), $('#bulk-create')];
+  const buttons = [$('#bulk-preview'), $('#bulk-create'), $('#bulk-delete-btn')];
   if (!dryRun && !account) {
     account = await bulkAskWriteAccount(message);
     if (!account) return;
@@ -1228,7 +1227,8 @@ async function bulkRun(dryRun, account = null, message = '', keep = false) {
     const c = data.counts || {};
     if (dryRun) {
       bulk.previewed = JSON.stringify(bulkPayload(true));
-      if (!keep) status.textContent = `${data.server} (${data.mgmt_ip}): ${c.new || 0} to create, ${c.exists || 0} already exist, ${c.invalid || 0} invalid`;
+      if (!keep) status.textContent = `${data.server} (${data.mgmt_ip}): ${c.new || 0} to create, ${c.exists || 0} already exist, ${c.invalid || 0} invalid`
+        + (data.volume_groups_error ? ` · ${data.volume_groups_error}` : '');
     } else {
       bulkInvalidate();
       status.textContent = `${data.server}: ${c.created || 0} created, ${c.exists || 0} skipped, ${(c.failed || 0) + (c.invalid || 0)} failed`;
@@ -1246,6 +1246,7 @@ async function bulkRun(dryRun, account = null, message = '', keep = false) {
     bulkInvalidate();
   } finally {
     $('#bulk-preview').disabled = false;
+    $('#bulk-delete-btn').disabled = false;
     $('#bulk-create').disabled = !bulk.previewed;
   }
 }
@@ -1290,40 +1291,62 @@ async function bulkMap(action) {
   }
 }
 
+// Delete the hosts typed in the box: a read-only check first, then a confirmation that
+// lists exactly the hosts that will go, then the delete of only those.
 async function bulkDelete() {
-  const hosts = [...bulk.sel];
-  if (!hosts.length || bulk.busy) return;
-  const server = $('#bulk-server').value;
-  let message = '';
-  for (;;) {
-    const account = await bulkAskWriteAccount(message, {
-      title: `Delete ${hosts.length} host(s) from ${server}?`,
-      text: 'These hosts and their initiators will be permanently removed from the machine. This cannot be undone. Hosts that still have volumes mapped or belong to a host group are skipped. Enter an account with write permission to confirm (used for this request only, never saved).',
-      hosts, button: `Delete ${hosts.length} host(s)`, danger: true,
-    });
-    if (!account) return;
-    bulk.busy = true;
-    bulkUpdateSelection();
-    $('#bulk-status').textContent = `Deleting ${hosts.length} host(s)…`;
-    try {
-      const data = await api('/api/hosts/delete', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ location: $('#bulk-location').value, server, hosts, ...account }) });
-      bulk.results = Object.fromEntries(data.items.map(r => [r.name, { status: r.status, detail: r.detail }]));
-      const c = data.counts || {};
-      $('#bulk-status').textContent = `${data.server}: ${c.deleted || 0} deleted, ${c.skipped || 0} skipped, ${c.failed || 0} failed`;
-      toast(`${c.deleted || 0} host(s) deleted on ${data.server}`);
-      bulk.sel.clear();
-      bulk.busy = false;
-      await bulkRun(true, null, '', true); // refresh: deleted hosts now show as "will create"
-      loadHosts().catch(() => {});
+  if (bulk.busy) return;
+  const text = $('#bulk-input').value;
+  const status = $('#bulk-status');
+  if (!text.trim()) { status.textContent = 'Enter the hosts to delete in the box above'; return; }
+  const location = $('#bulk-location').value, server = $('#bulk-server').value;
+  const buttons = [$('#bulk-preview'), $('#bulk-create'), $('#bulk-delete-btn')];
+  const post = body => api('/api/hosts/delete', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ location, server, ...body }) });
+  const show = data => { bulkInvalidate(); bulk.results = {}; bulkRender(data, true); };
+  bulk.busy = true;
+  buttons.forEach(b => { b.disabled = true; });
+  try {
+    status.textContent = 'Checking…';
+    let check;
+    try { check = await post({ hosts: text, dry_run: true }); } catch (e) { status.textContent = e.message; return; }
+    show(check);
+    const targets = check.items.filter(r => r.status === 'to_delete');
+    const left = check.items.length - targets.length;
+    if (!targets.length) {
+      status.textContent = `${check.server}: nothing to delete (${left} host(s) not found or skipped, see the table)`;
       return;
-    } catch (e) {
-      bulk.busy = false;
-      bulkUpdateSelection();
-      $('#bulk-status').textContent = e.message;
-      if (e.status !== 401) return;
-      message = e.message; // wrong or read-only account: ask again
     }
+    status.textContent = `${check.server}: ${targets.length} to delete${left ? `, ${left} skipped` : ''}`;
+    let message = '';
+    for (;;) {
+      const account = await bulkAskWriteAccount(message, {
+        title: `Delete ${targets.length} host(s) from ${check.server}?`,
+        text: `These hosts and their initiators will be permanently removed from ${check.server} (${check.mgmt_ip}). This cannot be undone.`
+          + (left ? ` ${left} other entr${left === 1 ? 'y is' : 'ies are'} not deleted (see the table).` : '')
+          + ' Enter an account with write permission to confirm (used for this request only, never saved).',
+        hosts: targets.map(r => r.name), button: `Delete ${targets.length} host(s)`, danger: true,
+      });
+      if (!account) { status.textContent = 'Delete cancelled'; return; }
+      status.textContent = `Deleting ${targets.length} host(s)…`;
+      try {
+        // Send only the confirmed entries, so nothing beyond what was shown is touched.
+        const data = await post({ hosts: targets.map(r => r.input).join('\n'), dry_run: false, ...account });
+        show(data);
+        const c = data.counts || {};
+        status.textContent = `${data.server}: ${c.deleted || 0} deleted, ${c.skipped || 0} skipped, ${c.failed || 0} failed`;
+        toast(`${c.deleted || 0} host(s) deleted on ${data.server}`);
+        loadHosts().catch(() => {});
+        return;
+      } catch (e) {
+        status.textContent = e.message;
+        if (e.status !== 401) return;
+        message = e.message; // wrong or read-only account: ask again
+      }
+    }
+  } finally {
+    bulk.busy = false;
+    $('#bulk-preview').disabled = false;
+    $('#bulk-delete-btn').disabled = false;
+    $('#bulk-create').disabled = !bulk.previewed;
   }
 }
 

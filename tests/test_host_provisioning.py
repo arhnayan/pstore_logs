@@ -95,3 +95,31 @@ class DeleteTests(unittest.TestCase):
         self.assertIn("still mapped", rows[1]["detail"])
         self.assertIn("host group", rows[2]["detail"])
         self.assertIn("OTHERNAME", rows[3]["detail"])
+
+    def test_dry_run_deletes_nothing(self):
+        from app.host_provisioning import delete_hosts
+
+        client = DeleteClient()
+        rows = parse_hosts("free1,mapped1")
+        asyncio.run(classify(client, rows))
+        asyncio.run(delete_hosts(client, rows, dry_run=True))
+        self.assertEqual(client.deleted, [])
+        self.assertEqual([r["status"] for r in rows], ["to_delete", "skipped"])
+
+
+class VolumeGroupFallbackTests(unittest.TestCase):
+    def test_membership_from_volumes_when_embedded_select_is_rejected(self):
+        from app.client import PowerStoreClient
+
+        class Client(PowerStoreClient):
+            async def _fetch_paged(self, path, *, params=None):
+                select = (params or {}).get("select", "")
+                if path == "/volume_group" and "volumes(" in select:
+                    raise PowerStoreError("400 Bad Request")
+                if path == "/volume_group":
+                    return [{"id": "vg1", "name": "A"}, {"id": "vg2", "name": "B"}]
+                return [{"id": "v1", "volume_groups": [{"id": "vg1"}]}, {"id": "v2", "volume_groups": []},
+                        {"id": "v3", "volume_groups": [{"id": "vg1"}]}]
+
+        groups = asyncio.run(Client(cluster_ip="x", username="u", password="p").get_volume_groups_with_volumes())
+        self.assertEqual([(g["id"], g["volume_count"]) for g in groups], [("vg1", 2), ("vg2", 0)])

@@ -262,13 +262,28 @@ class PowerStoreClient:
         return await self._fetch_paged("/snapshot_rule", params=params)
 
     async def get_volume_groups(self) -> list[dict[str, Any]]:
-        params = {"select": "id,name,description,volume_count"}
+        params = {"select": "id,name,description"}
         return await self._fetch_paged("/volume_group", params=params)
 
     async def get_volume_groups_with_volumes(self) -> list[dict[str, Any]]:
-        """Volume groups with the ids of their member volumes (used to derive host mappings)."""
-        params = {"select": "id,name,description,volume_count,volumes(id)"}
-        return await self._fetch_paged("/volume_group", params=params)
+        """Volume groups with the ids of their member volumes (used to derive host mappings).
+
+        Tries the embedded ``volumes(id)`` select first; arrays that reject it get the
+        membership from the volume side (``volume_groups(id)``) instead.
+        """
+        try:
+            groups = await self._fetch_paged("/volume_group", params={"select": "id,name,description,volumes(id)"})
+        except (PowerStoreError, httpx.HTTPStatusError):
+            groups = await self.get_volume_groups()
+            members: dict[str, list[dict[str, Any]]] = {g["id"]: [] for g in groups}
+            for vol in await self._fetch_paged("/volume", params={"select": "id,volume_groups(id)"}):
+                for vg in vol.get("volume_groups") or []:
+                    members.setdefault(vg.get("id"), []).append({"id": vol.get("id")})
+            for g in groups:
+                g["volumes"] = members.get(g["id"], [])
+        for g in groups:
+            g["volume_count"] = len(g.get("volumes") or [])
+        return groups
 
     async def _volume_group_action(self, action: str, volume_group_id: str, host_id: str) -> None:
         resp = await self._request("POST", f"/volume_group/{volume_group_id}/{action}", json={"host_id": host_id})

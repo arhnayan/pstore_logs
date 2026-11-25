@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>PowerStore Monitor</title>
-  <link rel="stylesheet" href="/static/css/style.css">
+  <link rel="stylesheet" href="/static/css/style.css?v=20261125">
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 </head>
 <body>
@@ -249,13 +249,13 @@
         <div class="filters" style="margin-top:0.75rem;">
           <button type="button" id="bulk-preview">Preview</button>
           <button type="button" id="bulk-create" disabled>Create hosts</button>
+          <button type="button" id="bulk-delete-btn" class="danger" title="Delete the hosts listed above from this machine">Delete hosts</button>
           <span id="bulk-status" class="page-subtitle"></span>
         </div>
         <div id="bulk-map" class="filters" style="margin-top:0.75rem;" hidden>
           <label>Volume group <select id="bulk-vg"></select></label>
           <button type="button" id="bulk-map-btn" disabled>Map</button>
           <button type="button" id="bulk-unmap-btn" disabled>Unmap</button>
-          <button type="button" id="bulk-delete-btn" class="danger" disabled title="Delete the ticked hosts from this machine">Delete hosts</button>
           <span id="bulk-sel-count" class="page-subtitle"></span>
         </div>
         <div id="bulk-result"></div>
@@ -436,6 +436,6 @@
   </main>
 
   <div id="toast" class="toast"></div>
-  <script src="/static/js/app.js"></script>
+  <script src="/static/js/app.js?v=20261125"></script>
 </body>
 </html>

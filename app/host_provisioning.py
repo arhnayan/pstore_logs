@@ -172,13 +172,14 @@ async def apply_volume_group(
     await asyncio.gather(*(one(r) for r in rows))
 
 
-async def delete_hosts(client: PowerStoreClient, rows: list[dict[str, Any]]) -> None:
-    """Delete every selected row that is safe to delete, a few hosts at a time.
+async def delete_hosts(client: PowerStoreClient, rows: list[dict[str, Any]], *, dry_run: bool = False) -> None:
+    """Delete every listed row that is safe to delete, a few hosts at a time.
 
     ``rows`` must already have gone through ``classify``. A host is only deleted when
     its name matches the entry exactly (never a differently named owner of the same
     initiator), it is not in a host group and no volumes are mapped to it. Each row
-    ends as ``deleted``, ``skipped`` or ``failed``.
+    ends as ``deleted``, ``skipped`` or ``failed``; with ``dry_run`` nothing is deleted
+    and deletable rows end as ``to_delete``.
     """
     mapped: dict[str, int] = {}
     for m in await client.get_host_volume_mappings():
@@ -201,6 +202,9 @@ async def delete_hosts(client: PowerStoreClient, rows: list[dict[str, Any]]) -> 
         if mapped.get(row["host_id"]):
             row.update(status="skipped",
                        detail=f"{mapped[row['host_id']]} volume(s) still mapped; unmap them first")
+            return
+        if dry_run:
+            row.update(status="to_delete", detail="")
             return
         async with gate:
             try:

@@ -96,9 +96,14 @@ async def bulk_create_hosts(payload: BulkHostsPayload) -> dict:
     try:
         await client.login(username, password)
         await classify(client, rows)
-        volume_groups: list[dict] = []
+        volume_groups: list[dict] | None = None
+        volume_groups_error = ""
         if payload.dry_run:
-            volume_groups = await annotate_volume_groups(client, rows)
+            try:
+                volume_groups = await annotate_volume_groups(client, rows)
+            except (PowerStoreError, httpx.HTTPStatusError) as exc:
+                # The volume group column is extra; never let it block the preview.
+                volume_groups_error = f"Volume groups unavailable on {payload.server}: {exc}"
         else:
             await provision(client, rows)
     except PowerStoreAuthError as exc:
@@ -114,6 +119,7 @@ async def bulk_create_hosts(payload: BulkHostsPayload) -> dict:
     return {
         "dry_run": payload.dry_run, "server": payload.server, "mgmt_ip": target_ip,
         "items": rows, "counts": counts, "volume_groups": volume_groups,
+        "volume_groups_error": volume_groups_error,
     }
 
 
@@ -165,28 +171,32 @@ async def map_hosts_to_volume_group(payload: VolumeGroupPayload) -> dict:
 class DeleteHostsPayload(BaseModel):
     location: str
     server: str
-    hosts: list[str]
+    hosts: str  # same comma/newline separated list as the create box
+    dry_run: bool = True
     username: str | None = None
     password: str | None = None
 
 
 @router.post("/delete")
 async def delete_hosts_endpoint(payload: DeleteHostsPayload) -> dict:
-    """Delete many existing hosts. Hosts with mapped volumes or in a host group are skipped."""
-    rows = parse_hosts("\n".join(payload.hosts))
+    """Delete the hosts named in the list. Hosts with mapped volumes or in a host group are skipped.
+
+    ``dry_run`` (default) only reports what would be deleted, using the monitoring account.
+    """
+    rows = parse_hosts(payload.hosts)
     if not rows:
-        raise HTTPException(status_code=400, detail="Select at least one host")
+        raise HTTPException(status_code=400, detail="Enter at least one host")
     if len(rows) > MAX_HOSTS:
         raise HTTPException(status_code=400, detail=f"Too many hosts ({len(rows)}); the limit is {MAX_HOSTS}")
     target_ip = await _resolve_target(payload.location, payload.server)
-    username, password = await _credentials(False, payload.username, payload.password, "delete hosts")
+    username, password = await _credentials(payload.dry_run, payload.username, payload.password, "delete hosts")
 
     client = create_client(cluster_ip=target_ip, username=username, password=password)
     await client.open()
     try:
         await client.login(username, password)
         await classify(client, rows)
-        await delete_hosts(client, rows)
+        await delete_hosts(client, rows, dry_run=payload.dry_run)
     except PowerStoreAuthError as exc:
         raise HTTPException(status_code=401, detail=str(exc)) from exc
     except (PowerStoreError, httpx.HTTPError, OSError) as exc:
@@ -197,4 +207,4 @@ async def delete_hosts_endpoint(payload: DeleteHostsPayload) -> dict:
     counts: dict[str, int] = {}
     for row in rows:
         counts[row["status"]] = counts.get(row["status"], 0) + 1
-    return {"server": payload.server, "items": rows, "counts": counts}
+    return {"dry_run": payload.dry_run, "server": payload.server, "mgmt_ip": target_ip, "items": rows, "counts": counts}
