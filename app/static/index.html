@@ -251,7 +251,25 @@
           <button type="button" id="bulk-create" disabled>Create hosts</button>
           <span id="bulk-status" class="page-subtitle"></span>
         </div>
+        <div id="bulk-map" class="filters" style="margin-top:0.75rem;" hidden>
+          <label>Volume group <select id="bulk-vg"></select></label>
+          <button type="button" id="bulk-map-btn" disabled>Map</button>
+          <button type="button" id="bulk-unmap-btn" disabled>Unmap</button>
+          <button type="button" id="bulk-delete-btn" class="danger" disabled title="Delete the ticked hosts from this machine">Delete hosts</button>
+          <span id="bulk-sel-count" class="page-subtitle"></span>
+        </div>
         <div id="bulk-result"></div>
+        <dialog id="bulk-auth">
+          <form id="bulk-auth-form" method="dialog">
+            <h3 id="bulk-auth-title">Write access required</h3>
+            <div id="bulk-auth-hosts"></div>
+            <p class="page-subtitle" id="bulk-auth-text">Creating hosts needs an account with write permission. The monitoring account is read-only. These credentials are used for this request only and are not saved.</p>
+            <label>Username<input type="text" id="bulk-auth-user" autocomplete="off" required style="width:100%;"></label>
+            <label>Password<input type="password" id="bulk-auth-pass" autocomplete="off" required style="width:100%;"></label>
+            <p id="bulk-auth-error" class="page-subtitle" style="color:var(--danger,#d33);"></p>
+            <div class="filters"><button type="submit" id="bulk-auth-submit">Create hosts</button><button type="button" id="bulk-auth-cancel">Cancel</button></div>
+          </form>
+        </dialog>
       </div>
       <div id="host-health-notice"></div>
       <div class="panel" id="host-health-summary"></div>

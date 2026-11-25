@@ -265,6 +265,23 @@ class PowerStoreClient:
         params = {"select": "id,name,description,volume_count"}
         return await self._fetch_paged("/volume_group", params=params)
 
+    async def get_volume_groups_with_volumes(self) -> list[dict[str, Any]]:
+        """Volume groups with the ids of their member volumes (used to derive host mappings)."""
+        params = {"select": "id,name,description,volume_count,volumes(id)"}
+        return await self._fetch_paged("/volume_group", params=params)
+
+    async def _volume_group_action(self, action: str, volume_group_id: str, host_id: str) -> None:
+        resp = await self._request("POST", f"/volume_group/{volume_group_id}/{action}", json={"host_id": host_id})
+        if resp.status_code not in (200, 201, 202, 204):
+            raise PowerStoreError(parse_error_response(resp))
+
+    async def attach_volume_group(self, volume_group_id: str, host_id: str) -> None:
+        """Map every volume of the group to one host (the REST API takes a single host per call)."""
+        await self._volume_group_action("attach", volume_group_id, host_id)
+
+    async def detach_volume_group(self, volume_group_id: str, host_id: str) -> None:
+        await self._volume_group_action("detach", volume_group_id, host_id)
+
     async def get_fc_ports(self) -> list[dict[str, Any]]:
         params = {
             "select": (
@@ -401,6 +418,12 @@ class PowerStoreClient:
             return str(resp.json().get("id", ""))
         except ValueError:
             return ""
+
+    async def delete_host(self, host_id: str) -> None:
+        """Delete one host. PowerStore refuses while volumes are still mapped to it."""
+        resp = await self._request("DELETE", f"/host/{host_id}")
+        if resp.status_code not in (200, 202, 204):
+            raise PowerStoreError(parse_error_response(resp))
 
     async def get_initiators(self) -> list[dict[str, Any]]:
         """Host initiators with their live login sessions (PowerStoreOS 3.0+)."""

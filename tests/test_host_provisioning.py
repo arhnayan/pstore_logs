@@ -55,3 +55,43 @@ class FlowTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DeleteClient:
+    def __init__(self):
+        self.deleted = []
+
+    async def get_hosts(self):
+        return [
+            {"id": "h1", "name": "FREE1"},
+            {"id": "h2", "name": "MAPPED1"},
+            {"id": "h3", "name": "GROUPED1", "host_group_id": "g1"},
+            {"id": "h4", "name": "OTHERNAME"},
+            {"id": "h5", "name": "BOOM"},
+        ]
+
+    async def get_initiators(self):
+        return [{"port_name": "nqn.2014-08.local.vodafone:nvme:viainit", "host_id": "h4"}]
+
+    async def get_host_volume_mappings(self):
+        return [{"host_id": "h2", "volume_id": "v1"}]
+
+    async def delete_host(self, host_id):
+        if host_id == "h5":
+            raise PowerStoreError("nope")
+        self.deleted.append(host_id)
+
+
+class DeleteTests(unittest.TestCase):
+    def test_only_safe_hosts_are_deleted(self):
+        from app.host_provisioning import delete_hosts
+
+        client = DeleteClient()
+        rows = parse_hosts("free1,mapped1,grouped1,viainit,missing1,boom")
+        asyncio.run(classify(client, rows))
+        asyncio.run(delete_hosts(client, rows))
+        self.assertEqual(client.deleted, ["h1"])
+        self.assertEqual([r["status"] for r in rows], ["deleted", "skipped", "skipped", "skipped", "skipped", "failed"])
+        self.assertIn("still mapped", rows[1]["detail"])
+        self.assertIn("host group", rows[2]["detail"])
+        self.assertIn("OTHERNAME", rows[3]["detail"])

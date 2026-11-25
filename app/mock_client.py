@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import io
 import math
 import zipfile
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from app.client import PowerStoreClient
+from app.client import PowerStoreClient, PowerStoreError
 
 TB = 1024**4
 _HOUR_HISTORY = 30 * 24
@@ -26,6 +27,13 @@ def _seed(text: str) -> int:
 
 
 _CREATED_HOSTS: list[dict[str, Any]] = []  # hosts "created" in mock mode, shared across clients
+_MOCK_VOLUME_GROUPS = [
+    {"id": "mock-vg-1", "name": "mock-group", "description": "Sample volume group", "volume_count": 2,
+     "volumes": [{"id": "mock-vol-1"}, {"id": "mock-vol-2"}]},
+    {"id": "mock-vg-2", "name": "esx-cluster-datastores", "description": "ESXi shared datastores", "volume_count": 1,
+     "volumes": [{"id": "mock-vol-3"}]},
+]
+_VG_ATTACHED: set[tuple[str, str]] = set()  # (volume_group_id, host_id) mapped through attach/detach
 
 
 class MockPowerStoreClient(PowerStoreClient):
@@ -298,6 +306,15 @@ class MockPowerStoreClient(PowerStoreClient):
         })
         return host_id
 
+    async def delete_host(self, host_id: str) -> None:
+        if any((m.get("host_id") == host_id) for m in await self.get_host_volume_mappings()):
+            raise PowerStoreError("The host has mapped volumes and cannot be deleted")
+        match = next((h for h in _CREATED_HOSTS if h["id"] == host_id), None)
+        if match is None:
+            raise PowerStoreError("Built-in mock hosts cannot be deleted")
+        await asyncio.sleep(0.1)
+        _CREATED_HOSTS.remove(match)
+
     async def get_initiators(self) -> list[dict[str, Any]]:
         """Two FC initiators per host. Hosts named in PSTORE_MOCK_DOWN (comma
         separated) have no sessions; PSTORE_MOCK_DEGRADED loses one initiator."""
@@ -338,7 +355,14 @@ class MockPowerStoreClient(PowerStoreClient):
         return initiators
 
     async def get_host_volume_mappings(self) -> list[dict[str, Any]]:
-        return [
+        attached = [
+            {"id": f"mock-map-{vg_id}-{host_id}-{vol['id']}", "host_id": host_id, "host_group_id": None,
+             "volume_id": vol["id"], "logical_unit_number": 10}
+            for vg_id, host_id in sorted(_VG_ATTACHED)
+            for vg in _MOCK_VOLUME_GROUPS if vg["id"] == vg_id
+            for vol in vg["volumes"]
+        ]
+        return attached + [
             {
                 "id": "mock-map-1",
                 "host_id": "mock-host-1",
@@ -626,12 +650,24 @@ class MockPowerStoreClient(PowerStoreClient):
         }]
 
     async def get_volume_groups(self) -> list[dict[str, Any]]:
-        return [{
-            "id": "mock-vg-1",
-            "name": "mock-group",
-            "description": "Sample volume group",
-            "volume_count": 2,
-        }]
+        return [{k: v for k, v in vg.items() if k != "volumes"} for vg in _MOCK_VOLUME_GROUPS]
+
+    async def get_volume_groups_with_volumes(self) -> list[dict[str, Any]]:
+        return [dict(vg) for vg in _MOCK_VOLUME_GROUPS]
+
+    async def attach_volume_group(self, volume_group_id: str, host_id: str) -> None:
+        if not any(vg["id"] == volume_group_id for vg in _MOCK_VOLUME_GROUPS):
+            raise PowerStoreError("Volume group not found")
+        if (volume_group_id, host_id) in _VG_ATTACHED:
+            raise PowerStoreError("The volume group is already attached to this host")
+        await asyncio.sleep(0.15)  # make concurrency visible in mock mode
+        _VG_ATTACHED.add((volume_group_id, host_id))
+
+    async def detach_volume_group(self, volume_group_id: str, host_id: str) -> None:
+        if (volume_group_id, host_id) not in _VG_ATTACHED:
+            raise PowerStoreError("The volume group is not attached to this host")
+        await asyncio.sleep(0.15)
+        _VG_ATTACHED.discard((volume_group_id, host_id))
 
     async def enable_fast_metrics(self, volume_id: str) -> None:
         return None

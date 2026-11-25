@@ -33,7 +33,9 @@ async function api(path, opts = {}) {
   const res = await fetch(path, opts);
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }));
-    throw new Error(fmtErrorDetail(err.detail) || res.statusText);
+    const error = new Error(fmtErrorDetail(err.detail) || res.statusText);
+    error.status = res.status;
+    throw error;
   }
   if (res.headers.get('content-type')?.includes('application/json')) return res.json();
   return res;
@@ -1099,14 +1101,58 @@ document.addEventListener('click', e => {
 });
 
 // ---- Mass host creation ----
-const bulk = { previewed: null };
+const bulk = { previewed: null, lastUser: '', data: null, sel: new Set(), results: {}, busy: false };
+
+const bulkBadge = { new: 'unhealthy', created: 'up', exists: 'unhealthy', invalid: 'down', failed: 'down', mapped: 'up', unmapped: 'up', deleted: 'up', skipped: 'unhealthy' };
+
+// A row can be ticked when it is an existing host that is not part of a host group.
+function bulkSelectable(r) { return r.status === 'exists' && r.host_id && !r.host_group_id; }
+
+function bulkVgCell(r) {
+  if (r.host_group_id) return '<span class="badge unhealthy">in host group</span>';
+  if (r.status !== 'exists') return '';
+  if (!r.volume_groups?.length) return '<span class="desc-cell">none</span>';
+  return r.volume_groups.map(g => `<span class="badge ${g.state === 'mapped' ? 'up' : 'unhealthy'}" title="${g.state === 'partial' ? 'Only some of the group\'s volumes are mapped' : 'Mapped'}">${escAttr(g.name)}${g.state === 'partial' ? ' (partial)' : ''}</span>`).join(' ');
+}
 
 function bulkRender(data, created) {
-  const badge = { new: 'unhealthy', created: 'up', exists: 'unhealthy', invalid: 'down', failed: 'down' };
-  const label = { new: created ? 'new' : 'will create', created: 'created', exists: 'skipped', invalid: 'invalid', failed: 'failed' };
-  $('#bulk-result').innerHTML = `<table><thead><tr><th>Host name</th><th>Initiator (NVMe)</th><th>OS</th><th>Result</th></tr></thead><tbody>${data.items.map(r => `
-    <tr><td>${escAttr(r.name)}</td><td>${escAttr(r.initiator)}</td><td>ESXi</td>
-    <td><span class="badge ${badge[r.status] || ''}">${label[r.status] || r.status}</span>${r.detail ? ` <span class="desc-cell">${escAttr(r.detail)}</span>` : ''}</td></tr>`).join('')}</tbody></table>`;
+  bulk.data = data;
+  const label = { new: created ? 'new' : 'will create', created: 'created', exists: created ? 'skipped' : 'exists', invalid: 'invalid', failed: 'failed' };
+  const mapMode = !created && data.volume_groups;
+  const rows = data.items;
+  const selectable = rows.filter(bulkSelectable);
+  const allOn = selectable.length && selectable.every(r => bulk.sel.has(r.name));
+  $('#bulk-result').innerHTML = `<table><thead><tr>${mapMode ? `<th><input type="checkbox" id="bulk-sel-all" ${allOn ? 'checked' : ''} ${selectable.length ? '' : 'disabled'} title="Select all"></th>` : ''}<th>Host name</th><th>Initiator (NVMe)</th><th>OS</th>${mapMode ? '<th>Volume groups</th>' : ''}<th>Result</th></tr></thead><tbody>${rows.map(r => {
+    const act = bulk.results[r.name];
+    const res = act ? `<span class="badge ${bulkBadge[act.status] || ''}">${act.status}</span>${act.detail ? ` <span class="desc-cell">${escAttr(act.detail)}</span>` : ''}`
+      : `<span class="badge ${bulkBadge[r.status] || ''}">${label[r.status] || r.status}</span>${r.detail ? ` <span class="desc-cell">${escAttr(r.detail)}</span>` : ''}`;
+    return `<tr>${mapMode ? `<td><input type="checkbox" class="bulk-sel" data-name="${escAttr(r.name)}" ${bulkSelectable(r) ? '' : 'disabled'} ${bulk.sel.has(r.name) ? 'checked' : ''}></td>` : ''}
+    <td>${escAttr(r.name)}</td><td>${escAttr(r.initiator)}</td><td>ESXi</td>${mapMode ? `<td>${bulkVgCell(r)}</td>` : ''}
+    <td>${res}</td></tr>`;
+  }).join('')}</tbody></table>`;
+  bulkRenderMapBar(mapMode ? data.volume_groups : null);
+}
+
+function bulkRenderMapBar(groups) {
+  const bar = $('#bulk-map');
+  bar.hidden = !groups;
+  if (!groups) return;
+  const sel = $('#bulk-vg');
+  const keep = sel.value;
+  sel.innerHTML = groups.length
+    ? groups.map(g => `<option value="${escAttr(g.id)}">${escAttr(g.name)} (${g.volume_count} vol)</option>`).join('')
+    : '<option value="">No volume groups on this machine</option>';
+  if (groups.some(g => g.id === keep)) sel.value = keep;
+  bulkUpdateSelection();
+}
+
+function bulkUpdateSelection() {
+  const n = bulk.sel.size;
+  const ok = n > 0 && !!$('#bulk-vg').value && !bulk.busy;
+  $('#bulk-map-btn').disabled = !ok;
+  $('#bulk-unmap-btn').disabled = !ok;
+  $('#bulk-delete-btn').disabled = !n || bulk.busy;
+  $('#bulk-sel-count').textContent = n ? `${n} host(s) selected` : 'Tick hosts to map, unmap or delete';
 }
 
 function bulkPayload(dry_run) {
@@ -1115,6 +1161,9 @@ function bulkPayload(dry_run) {
 
 function bulkInvalidate() {
   bulk.previewed = null;
+  bulk.sel.clear();
+  bulk.results = {};
+  $('#bulk-map').hidden = true;
   $('#bulk-create').disabled = true;
 }
 
@@ -1134,18 +1183,52 @@ function bulkFillServers() {
   $('#bulk-server').innerHTML = (loc?.servers || []).map(s => `<option value="${escAttr(s)}">${escAttr(s)}${loc.server_ips?.[s] ? ' · ' + escAttr(loc.server_ips[s]) : ''}</option>`).join('');
 }
 
-async function bulkRun(dryRun) {
+// Ask for an account with write permission (never stored). Resolves to {username, password} or null.
+function bulkAskWriteAccount(message = '', opts = {}) {
+  const dlg = $('#bulk-auth');
+  $('#bulk-auth-title').textContent = opts.title || 'Write access required';
+  $('#bulk-auth-text').textContent = opts.text || 'Creating hosts needs an account with write permission. The monitoring account is read-only. These credentials are used for this request only and are not saved.';
+  $('#bulk-auth-submit').textContent = opts.button || 'Create hosts';
+  $('#bulk-auth-submit').classList.toggle('danger', !!opts.danger);
+  $('#bulk-auth-hosts').innerHTML = opts.hosts ? `<div class="desc-cell" style="max-height:10rem;overflow:auto;margin:0.5rem 0;">${opts.hosts.map(escAttr).join(', ')}</div>` : '';
+  $('#bulk-auth-error').textContent = message;
+  $('#bulk-auth-user').value = bulk.lastUser;
+  $('#bulk-auth-pass').value = '';
+  return new Promise(resolve => {
+    const done = value => { dlg.onclose = null; $('#bulk-auth-pass').value = ''; resolve(value); };
+    $('#bulk-auth-form').onsubmit = e => {
+      e.preventDefault();
+      bulk.lastUser = $('#bulk-auth-user').value.trim();
+      const value = { username: bulk.lastUser, password: $('#bulk-auth-pass').value };
+      dlg.onclose = null;
+      dlg.close();
+      done(value);
+    };
+    $('#bulk-auth-cancel').onclick = () => { dlg.close(); };
+    dlg.onclose = () => done(null);
+    dlg.showModal();
+    (bulk.lastUser ? $('#bulk-auth-pass') : $('#bulk-auth-user')).focus();
+  });
+}
+
+async function bulkRun(dryRun, account = null, message = '', keep = false) {
   const status = $('#bulk-status');
   const buttons = [$('#bulk-preview'), $('#bulk-create')];
+  if (!dryRun && !account) {
+    account = await bulkAskWriteAccount(message);
+    if (!account) return;
+  }
   buttons.forEach(b => { b.disabled = true; });
-  status.textContent = dryRun ? 'Checking…' : 'Creating…';
+  if (!keep) status.textContent = dryRun ? 'Checking…' : 'Creating…';
   try {
-    const data = await api('/api/hosts/bulk', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(bulkPayload(dryRun)) });
+    const body = { ...bulkPayload(dryRun), ...(dryRun ? {} : account) };
+    const data = await api('/api/hosts/bulk', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    if (!keep) { bulk.sel.clear(); bulk.results = {}; }
     bulkRender(data, !dryRun);
     const c = data.counts || {};
     if (dryRun) {
       bulk.previewed = JSON.stringify(bulkPayload(true));
-      status.textContent = `${data.server} (${data.mgmt_ip}): ${c.new || 0} to create, ${c.exists || 0} already exist, ${c.invalid || 0} invalid`;
+      if (!keep) status.textContent = `${data.server} (${data.mgmt_ip}): ${c.new || 0} to create, ${c.exists || 0} already exist, ${c.invalid || 0} invalid`;
     } else {
       bulkInvalidate();
       status.textContent = `${data.server}: ${c.created || 0} created, ${c.exists || 0} skipped, ${(c.failed || 0) + (c.invalid || 0)} failed`;
@@ -1154,6 +1237,12 @@ async function bulkRun(dryRun) {
     }
   } catch (e) {
     status.textContent = e.message;
+    if (!dryRun && e.status === 401) {
+      // Wrong or read-only account: keep the preview and ask again.
+      $('#bulk-preview').disabled = false;
+      $('#bulk-create').disabled = false;
+      return bulkRun(false, null, e.message);
+    }
     bulkInvalidate();
   } finally {
     $('#bulk-preview').disabled = false;
@@ -1161,8 +1250,98 @@ async function bulkRun(dryRun) {
   }
 }
 
+async function bulkMap(action) {
+  const vgSel = $('#bulk-vg');
+  const vgName = vgSel.selectedOptions[0]?.textContent.replace(/ \(\d+ vol\)$/, '') || '';
+  const hosts = [...bulk.sel];
+  if (!hosts.length || !vgSel.value || bulk.busy) return;
+  const verb = action === 'map' ? 'Map' : 'Unmap';
+  let account = null, message = '';
+  for (;;) {
+    account = await bulkAskWriteAccount(message, {
+      title: `${verb} ${hosts.length} host(s) ${action === 'map' ? 'to' : 'from'} ${vgName}?`,
+      text: action === 'map'
+        ? 'The group\'s volumes will be mapped to these hosts. Enter an account with write permission (used for this request only, never saved).'
+        : 'The group\'s volumes will be unmapped from these hosts. Datastores still in use will lose access. Enter an account with write permission (used for this request only, never saved).',
+      hosts, button: verb,
+    });
+    if (!account) return;
+    bulk.busy = true;
+    bulkUpdateSelection();
+    $('#bulk-status').textContent = `${verb === 'Map' ? 'Mapping' : 'Unmapping'} ${hosts.length} host(s)…`;
+    try {
+      const data = await api('/api/hosts/volume-group', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ location: $('#bulk-location').value, server: $('#bulk-server').value, hosts, volume_group_id: vgSel.value, action, ...account }) });
+      bulk.results = Object.fromEntries(data.items.map(r => [r.name, { status: r.status, detail: r.detail }]));
+      const c = data.counts || {};
+      $('#bulk-status').textContent = `${data.server}: ${c.mapped || 0} mapped, ${c.unmapped || 0} unmapped, ${c.skipped || 0} skipped, ${c.failed || 0} failed`;
+      toast(`${verb} finished on ${data.server}`);
+      bulk.sel.clear();
+      bulk.busy = false;
+      await bulkRun(true, null, '', true); // refresh the volume group column
+      return;
+    } catch (e) {
+      bulk.busy = false;
+      bulkUpdateSelection();
+      $('#bulk-status').textContent = e.message;
+      if (e.status !== 401) return;
+      message = e.message; // wrong or read-only account: ask again
+    }
+  }
+}
+
+async function bulkDelete() {
+  const hosts = [...bulk.sel];
+  if (!hosts.length || bulk.busy) return;
+  const server = $('#bulk-server').value;
+  let message = '';
+  for (;;) {
+    const account = await bulkAskWriteAccount(message, {
+      title: `Delete ${hosts.length} host(s) from ${server}?`,
+      text: 'These hosts and their initiators will be permanently removed from the machine. This cannot be undone. Hosts that still have volumes mapped or belong to a host group are skipped. Enter an account with write permission to confirm (used for this request only, never saved).',
+      hosts, button: `Delete ${hosts.length} host(s)`, danger: true,
+    });
+    if (!account) return;
+    bulk.busy = true;
+    bulkUpdateSelection();
+    $('#bulk-status').textContent = `Deleting ${hosts.length} host(s)…`;
+    try {
+      const data = await api('/api/hosts/delete', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ location: $('#bulk-location').value, server, hosts, ...account }) });
+      bulk.results = Object.fromEntries(data.items.map(r => [r.name, { status: r.status, detail: r.detail }]));
+      const c = data.counts || {};
+      $('#bulk-status').textContent = `${data.server}: ${c.deleted || 0} deleted, ${c.skipped || 0} skipped, ${c.failed || 0} failed`;
+      toast(`${c.deleted || 0} host(s) deleted on ${data.server}`);
+      bulk.sel.clear();
+      bulk.busy = false;
+      await bulkRun(true, null, '', true); // refresh: deleted hosts now show as "will create"
+      loadHosts().catch(() => {});
+      return;
+    } catch (e) {
+      bulk.busy = false;
+      bulkUpdateSelection();
+      $('#bulk-status').textContent = e.message;
+      if (e.status !== 401) return;
+      message = e.message; // wrong or read-only account: ask again
+    }
+  }
+}
+
 function setupBulkHosts() {
   bulkFillLocations();
+  $('#bulk-map-btn').addEventListener('click', () => bulkMap('map'));
+  $('#bulk-unmap-btn').addEventListener('click', () => bulkMap('unmap'));
+  $('#bulk-delete-btn').addEventListener('click', bulkDelete);
+  $('#bulk-vg').addEventListener('change', bulkUpdateSelection);
+  $('#bulk-result').addEventListener('change', e => {
+    if (e.target.id === 'bulk-sel-all') {
+      (bulk.data?.items || []).filter(bulkSelectable).forEach(r => e.target.checked ? bulk.sel.add(r.name) : bulk.sel.delete(r.name));
+      bulkRender(bulk.data, false);
+    } else if (e.target.classList.contains('bulk-sel')) {
+      e.target.checked ? bulk.sel.add(e.target.dataset.name) : bulk.sel.delete(e.target.dataset.name);
+      bulkUpdateSelection();
+    }
+  });
   $('#bulk-location').addEventListener('change', () => { bulkFillServers(); bulkInvalidate(); });
   $('#bulk-server').addEventListener('change', bulkInvalidate);
   $('#bulk-input').addEventListener('input', bulkInvalidate);
