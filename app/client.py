@@ -262,7 +262,7 @@ class PowerStoreClient:
         return await self._fetch_paged("/snapshot_rule", params=params)
 
     async def get_volume_groups(self) -> list[dict[str, Any]]:
-        params = {"select": "id,name,description"}
+        params = {"select": "id,name,description,type"}
         return await self._fetch_paged("/volume_group", params=params)
 
     async def get_volume_groups_with_volumes(self) -> list[dict[str, Any]]:
@@ -272,7 +272,9 @@ class PowerStoreClient:
         membership from the volume side (``volume_groups(id)``) instead.
         """
         try:
-            groups = await self._fetch_paged("/volume_group", params={"select": "id,name,description,volumes(id)"})
+            groups = await self._fetch_paged(
+                "/volume_group", params={"select": "id,name,description,type,volumes(id)"}
+            )
         except (PowerStoreError, httpx.HTTPStatusError):
             groups = await self.get_volume_groups()
             members: dict[str, list[dict[str, Any]]] = {g["id"]: [] for g in groups}
@@ -285,17 +287,19 @@ class PowerStoreClient:
             g["volume_count"] = len(g.get("volumes") or [])
         return groups
 
-    async def _volume_group_action(self, action: str, volume_group_id: str, host_id: str) -> None:
-        resp = await self._request("POST", f"/volume_group/{volume_group_id}/{action}", json={"host_id": host_id})
+    async def _host_volume_action(self, action: str, host_id: str, volume_id: str) -> None:
+        # POST /host/{id}/attach|detach {"volume_id": ...} -> 204 (PowerStore REST API 4.0).
+        # PowerStore has no volume group attach: a group is mapped one member volume at a time.
+        resp = await self._request("POST", f"/host/{host_id}/{action}", json={"volume_id": volume_id})
         if resp.status_code not in (200, 201, 202, 204):
             raise PowerStoreError(parse_error_response(resp))
 
-    async def attach_volume_group(self, volume_group_id: str, host_id: str) -> None:
-        """Map every volume of the group to one host (the REST API takes a single host per call)."""
-        await self._volume_group_action("attach", volume_group_id, host_id)
+    async def attach_host_volume(self, host_id: str, volume_id: str) -> None:
+        """Map one volume to one host; PowerStore picks the LUN / namespace id."""
+        await self._host_volume_action("attach", host_id, volume_id)
 
-    async def detach_volume_group(self, volume_group_id: str, host_id: str) -> None:
-        await self._volume_group_action("detach", volume_group_id, host_id)
+    async def detach_host_volume(self, host_id: str, volume_id: str) -> None:
+        await self._host_volume_action("detach", host_id, volume_id)
 
     async def get_fc_ports(self) -> list[dict[str, Any]]:
         params = {

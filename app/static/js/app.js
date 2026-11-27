@@ -1109,20 +1109,27 @@ const bulkBadge = { new: 'unhealthy', created: 'up', exists: 'unhealthy', invali
 function bulkSelectable(r) { return r.status === 'exists' && r.host_id && !r.host_group_id; }
 
 function bulkVgCell(r) {
-  if (r.host_group_id) return '<span class="badge unhealthy">in host group</span>';
   if (r.status !== 'exists') return '';
-  if (!r.volume_groups?.length) return '<span class="desc-cell">none</span>';
-  return r.volume_groups.map(g => `<span class="badge ${g.state === 'mapped' ? 'up' : 'unhealthy'}" title="${g.state === 'partial' ? 'Only some of the group\'s volumes are mapped' : 'Mapped'}">${escAttr(g.name)}${g.state === 'partial' ? ' (partial)' : ''}</span>`).join(' ');
+  const groups = (r.volume_groups || []).map(g => `<span class="badge ${g.state === 'mapped' ? 'up' : 'unhealthy'}" title="${g.state === 'partial' ? 'Volume group: only some of its volumes are mapped' : 'Volume group: all volumes mapped'}">${escAttr(g.name)}${g.state === 'partial' ? ' (partial)' : ''}</span>`);
+  const vols = r.volumes || [];
+  if (vols.length) {
+    const names = vols.map(v => v.name);
+    groups.push(vols.length <= 3
+      ? names.map(n => `<span class="desc-cell">${escAttr(n)}</span>`).join(', ')
+      : `<span class="desc-cell" title="${escAttr(names.join('\n'))}">${vols.length} volumes</span>`);
+  }
+  if (r.host_group_id) groups.unshift('<span class="badge unhealthy">in host group</span>');
+  return groups.join(' ') || '<span class="desc-cell">none</span>';
 }
 
 function bulkRender(data, created) {
   bulk.data = data;
   const label = { new: created ? 'new' : 'will create', created: 'created', exists: created ? 'skipped' : 'exists', invalid: 'invalid', failed: 'failed', to_delete: 'will delete' };
-  const mapMode = !created && data.volume_groups;
+  const mapMode = !created && Array.isArray(data.volumes);
   const rows = data.items;
   const selectable = rows.filter(bulkSelectable);
   const allOn = selectable.length && selectable.every(r => bulk.sel.has(r.name));
-  $('#bulk-result').innerHTML = `<table><thead><tr>${mapMode ? `<th><input type="checkbox" id="bulk-sel-all" ${allOn ? 'checked' : ''} ${selectable.length ? '' : 'disabled'} title="Select all"></th>` : ''}<th>Host name</th><th>Initiator (NVMe)</th><th>OS</th>${mapMode ? '<th>Volume groups</th>' : ''}<th>Result</th></tr></thead><tbody>${rows.map(r => {
+  $('#bulk-result').innerHTML = `<table><thead><tr>${mapMode ? `<th><input type="checkbox" id="bulk-sel-all" ${allOn ? 'checked' : ''} ${selectable.length ? '' : 'disabled'} title="Select all"></th>` : ''}<th>Host name</th><th>Initiator (NVMe)</th><th>OS</th>${mapMode ? '<th>Mapped volumes</th>' : ''}<th>Result</th></tr></thead><tbody>${rows.map(r => {
     const act = bulk.results[r.name];
     const res = act ? `<span class="badge ${bulkBadge[act.status] || ''}">${act.status}</span>${act.detail ? ` <span class="desc-cell">${escAttr(act.detail)}</span>` : ''}`
       : `<span class="badge ${bulkBadge[r.status] || ''}">${label[r.status] || r.status}</span>${r.detail ? ` <span class="desc-cell">${escAttr(r.detail)}</span>` : ''}`;
@@ -1130,19 +1137,37 @@ function bulkRender(data, created) {
     <td>${escAttr(r.name)}</td><td>${escAttr(r.initiator)}</td><td>ESXi</td>${mapMode ? `<td>${bulkVgCell(r)}</td>` : ''}
     <td>${res}</td></tr>`;
   }).join('')}</tbody></table>`;
-  bulkRenderMapBar(mapMode ? data.volume_groups : null);
+  bulkRenderMapBar(mapMode ? data : null);
 }
 
-function bulkRenderMapBar(groups) {
+function bulkFmtSize(bytes) {
+  if (!bytes) return '';
+  const tb = bytes / 1024 ** 4;
+  return tb >= 1 ? `${+tb.toFixed(1)} TB` : `${+(bytes / 1024 ** 3).toFixed(0)} GB`;
+}
+
+// The map/unmap target list: single volumes (LUNs) and volume groups, filtered by the search box.
+function bulkRenderMapBar(data) {
   const bar = $('#bulk-map');
-  bar.hidden = !groups;
-  if (!groups) return;
+  bar.hidden = !data;
+  if (!data) return;
+  bulk.targets = { volumes: data.volumes || [], groups: data.volume_groups || [] };
+  bulkFillTargets();
+}
+
+function bulkFillTargets() {
   const sel = $('#bulk-vg');
   const keep = sel.value;
-  sel.innerHTML = groups.length
-    ? groups.map(g => `<option value="${escAttr(g.id)}">${escAttr(g.name)} (${g.volume_count} vol)</option>`).join('')
-    : '<option value="">No volume groups on this machine</option>';
-  if (groups.some(g => g.id === keep)) sel.value = keep;
+  const q = $('#bulk-vg-filter').value.trim().toLowerCase();
+  const hit = x => !q || (x.name || '').toLowerCase().includes(q);
+  const { volumes = [], groups = [] } = bulk.targets || {};
+  const vols = volumes.filter(hit), grps = groups.filter(hit);
+  const opt = (value, text) => `<option value="${escAttr(value)}">${escAttr(text)}</option>`;
+  let html = '';
+  if (vols.length) html += `<optgroup label="Volumes (${vols.length})">${vols.map(v => opt('vol:' + v.id, `${v.name}${v.size ? ' · ' + bulkFmtSize(v.size) : ''}${v.type === 'Clone' ? ' · clone' : ''}`)).join('')}</optgroup>`;
+  if (grps.length) html += `<optgroup label="Volume groups (${grps.length})">${grps.map(g => opt('vg:' + g.id, `${g.name} (${g.volume_count} vol)`)).join('')}</optgroup>`;
+  sel.innerHTML = html || `<option value="">${volumes.length || groups.length ? 'No match' : 'No volumes on this machine'}</option>`;
+  if ([...sel.options].some(o => o.value === keep)) sel.value = keep;
   bulkUpdateSelection();
 }
 
@@ -1228,7 +1253,7 @@ async function bulkRun(dryRun, account = null, message = '', keep = false) {
     if (dryRun) {
       bulk.previewed = JSON.stringify(bulkPayload(true));
       if (!keep) status.textContent = `${data.server} (${data.mgmt_ip}): ${c.new || 0} to create, ${c.exists || 0} already exist, ${c.invalid || 0} invalid`
-        + (data.volume_groups_error ? ` · ${data.volume_groups_error}` : '');
+        + (data.mapping_error ? ` · ${data.mapping_error}` : '');
     } else {
       bulkInvalidate();
       status.textContent = `${data.server}: ${c.created || 0} created, ${c.exists || 0} skipped, ${(c.failed || 0) + (c.invalid || 0)} failed`;
@@ -1253,7 +1278,8 @@ async function bulkRun(dryRun, account = null, message = '', keep = false) {
 
 async function bulkMap(action) {
   const vgSel = $('#bulk-vg');
-  const vgName = vgSel.selectedOptions[0]?.textContent.replace(/ \(\d+ vol\)$/, '') || '';
+  const vgName = vgSel.selectedOptions[0]?.textContent.replace(/ \(\d+ vol\)$| · .*$/, '') || '';
+  const isGroup = vgSel.value.startsWith('vg:');
   const hosts = [...bulk.sel];
   if (!hosts.length || !vgSel.value || bulk.busy) return;
   const verb = action === 'map' ? 'Map' : 'Unmap';
@@ -1262,8 +1288,8 @@ async function bulkMap(action) {
     account = await bulkAskWriteAccount(message, {
       title: `${verb} ${hosts.length} host(s) ${action === 'map' ? 'to' : 'from'} ${vgName}?`,
       text: action === 'map'
-        ? 'The group\'s volumes will be mapped to these hosts. Enter an account with write permission (used for this request only, never saved).'
-        : 'The group\'s volumes will be unmapped from these hosts. Datastores still in use will lose access. Enter an account with write permission (used for this request only, never saved).',
+        ? `${isGroup ? 'Every volume in the group' : 'The volume'} will be mapped to these hosts. Enter an account with write permission (used for this request only, never saved).`
+        : `${isGroup ? 'Every volume in the group' : 'The volume'} will be unmapped from these hosts. Datastores still in use will lose access. Enter an account with write permission (used for this request only, never saved).`,
       hosts, button: verb,
     });
     if (!account) return;
@@ -1271,15 +1297,15 @@ async function bulkMap(action) {
     bulkUpdateSelection();
     $('#bulk-status').textContent = `${verb === 'Map' ? 'Mapping' : 'Unmapping'} ${hosts.length} host(s)…`;
     try {
-      const data = await api('/api/hosts/volume-group', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ location: $('#bulk-location').value, server: $('#bulk-server').value, hosts, volume_group_id: vgSel.value, action, ...account }) });
+      const data = await api('/api/hosts/map', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ location: $('#bulk-location').value, server: $('#bulk-server').value, hosts, target: vgSel.value, action, ...account }) });
       bulk.results = Object.fromEntries(data.items.map(r => [r.name, { status: r.status, detail: r.detail }]));
       const c = data.counts || {};
       $('#bulk-status').textContent = `${data.server}: ${c.mapped || 0} mapped, ${c.unmapped || 0} unmapped, ${c.skipped || 0} skipped, ${c.failed || 0} failed`;
       toast(`${verb} finished on ${data.server}`);
       bulk.sel.clear();
       bulk.busy = false;
-      await bulkRun(true, null, '', true); // refresh the volume group column
+      await bulkRun(true, null, '', true); // refresh the mapped volumes column
       return;
     } catch (e) {
       bulk.busy = false;
@@ -1356,6 +1382,7 @@ function setupBulkHosts() {
   $('#bulk-unmap-btn').addEventListener('click', () => bulkMap('unmap'));
   $('#bulk-delete-btn').addEventListener('click', bulkDelete);
   $('#bulk-vg').addEventListener('change', bulkUpdateSelection);
+  $('#bulk-vg-filter').addEventListener('input', bulkFillTargets);
   $('#bulk-result').addEventListener('change', e => {
     if (e.target.id === 'bulk-sel-all') {
       (bulk.data?.items || []).filter(bulkSelectable).forEach(r => e.target.checked ? bulk.sel.add(r.name) : bulk.sel.delete(r.name));

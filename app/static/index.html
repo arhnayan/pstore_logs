@@ -253,7 +253,8 @@
           <span id="bulk-status" class="page-subtitle"></span>
         </div>
         <div id="bulk-map" class="filters" style="margin-top:0.75rem;" hidden>
-          <label>Volume group <select id="bulk-vg"></select></label>
+          <input type="search" id="bulk-vg-filter" placeholder="Filter volumes" style="width:12rem;">
+          <label>Volume <select id="bulk-vg"></select></label>
           <button type="button" id="bulk-map-btn" disabled>Map</button>
           <button type="button" id="bulk-unmap-btn" disabled>Unmap</button>
           <span id="bulk-sel-count" class="page-subtitle"></span>
@@ -436,6 +437,6 @@
   </main>
 
   <div id="toast" class="toast"></div>
-  <script src="/static/js/app.js?v=20261125"></script>
+  <script src="/static/js/app.js?v=20261127"></script>
 </body>
 </html>

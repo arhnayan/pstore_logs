@@ -11,7 +11,7 @@ from app.config import settings
 from app.credentials import get_credentials
 from app.deps import collector, db
 from app.host_provisioning import (
-    MAX_HOSTS, annotate_volume_groups, apply_volume_group, classify, delete_hosts, parse_hosts, provision,
+    MAX_HOSTS, annotate_mappings, apply_mapping, classify, delete_hosts, parse_hosts, provision, resolve_target,
 )
 from app.locations import ensure_locations
 from app.mailer import get_email_config
@@ -96,14 +96,14 @@ async def bulk_create_hosts(payload: BulkHostsPayload) -> dict:
     try:
         await client.login(username, password)
         await classify(client, rows)
-        volume_groups: list[dict] | None = None
-        volume_groups_error = ""
+        targets: dict | None = None
+        mapping_error = ""
         if payload.dry_run:
             try:
-                volume_groups = await annotate_volume_groups(client, rows)
+                targets = await annotate_mappings(client, rows)
             except (PowerStoreError, httpx.HTTPStatusError) as exc:
-                # The volume group column is extra; never let it block the preview.
-                volume_groups_error = f"Volume groups unavailable on {payload.server}: {exc}"
+                # The mapping column is extra; never let it block the preview.
+                mapping_error = f"Volumes unavailable on {payload.server}: {exc}"
         else:
             await provision(client, rows)
     except PowerStoreAuthError as exc:
@@ -118,24 +118,26 @@ async def bulk_create_hosts(payload: BulkHostsPayload) -> dict:
         counts[row["status"]] = counts.get(row["status"], 0) + 1
     return {
         "dry_run": payload.dry_run, "server": payload.server, "mgmt_ip": target_ip,
-        "items": rows, "counts": counts, "volume_groups": volume_groups,
-        "volume_groups_error": volume_groups_error,
+        "items": rows, "counts": counts,
+        "volumes": targets["volumes"] if targets else None,
+        "volume_groups": targets["volume_groups"] if targets else None,
+        "mapping_error": mapping_error,
     }
 
 
-class VolumeGroupPayload(BaseModel):
+class MapPayload(BaseModel):
     location: str
     server: str
     hosts: list[str]
-    volume_group_id: str
+    target: str  # "vol:<volume id>" or "vg:<volume group id>"
     action: str  # "map" or "unmap"
     username: str | None = None
     password: str | None = None
 
 
-@router.post("/volume-group")
-async def map_hosts_to_volume_group(payload: VolumeGroupPayload) -> dict:
-    """Map or unmap a volume group for many existing hosts (a few calls in parallel)."""
+@router.post("/map")
+async def map_hosts(payload: MapPayload) -> dict:
+    """Map or unmap one volume, or every volume of a volume group, for many existing hosts."""
     if payload.action not in ("map", "unmap"):
         raise HTTPException(status_code=400, detail="action must be 'map' or 'unmap'")
     rows = parse_hosts("\n".join(payload.hosts))
@@ -144,17 +146,19 @@ async def map_hosts_to_volume_group(payload: VolumeGroupPayload) -> dict:
     if len(rows) > MAX_HOSTS:
         raise HTTPException(status_code=400, detail=f"Too many hosts ({len(rows)}); the limit is {MAX_HOSTS}")
     target_ip = await _resolve_target(payload.location, payload.server)
-    username, password = await _credentials(False, payload.username, payload.password, "map volume groups")
+    username, password = await _credentials(False, payload.username, payload.password, "map volumes")
 
     client = create_client(cluster_ip=target_ip, username=username, password=password)
     await client.open()
     try:
         await client.login(username, password)
         await classify(client, rows)
-        groups = await annotate_volume_groups(client, rows)
-        if not any(g["id"] == payload.volume_group_id for g in groups):
-            raise HTTPException(status_code=400, detail="Unknown volume group on this machine")
-        await apply_volume_group(client, rows, payload.volume_group_id, payload.action)
+        targets = await annotate_mappings(client, rows)
+        try:
+            label, volume_ids = resolve_target(targets, payload.target)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        await apply_mapping(client, rows, volume_ids, payload.action)
     except PowerStoreAuthError as exc:
         raise HTTPException(status_code=401, detail=str(exc)) from exc
     except (PowerStoreError, httpx.HTTPError, OSError) as exc:
@@ -165,7 +169,7 @@ async def map_hosts_to_volume_group(payload: VolumeGroupPayload) -> dict:
     counts: dict[str, int] = {}
     for row in rows:
         counts[row["status"]] = counts.get(row["status"], 0) + 1
-    return {"action": payload.action, "server": payload.server, "items": rows, "counts": counts}
+    return {"action": payload.action, "server": payload.server, "target": label, "items": rows, "counts": counts}
 
 
 class DeleteHostsPayload(BaseModel):

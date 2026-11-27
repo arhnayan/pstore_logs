@@ -28,12 +28,14 @@ def _seed(text: str) -> int:
 
 _CREATED_HOSTS: list[dict[str, Any]] = []  # hosts "created" in mock mode, shared across clients
 _MOCK_VOLUME_GROUPS = [
-    {"id": "mock-vg-1", "name": "mock-group", "description": "Sample volume group", "volume_count": 2,
+    {"id": "mock-vg-1", "name": "mock-group", "description": "Sample volume group", "type": "Primary",
      "volumes": [{"id": "mock-vol-1"}, {"id": "mock-vol-2"}]},
-    {"id": "mock-vg-2", "name": "esx-cluster-datastores", "description": "ESXi shared datastores", "volume_count": 1,
-     "volumes": [{"id": "mock-vol-3"}]},
+    {"id": "mock-vg-2", "name": "esx-cluster-datastores", "description": "ESXi shared datastores", "type": "Primary",
+     "volumes": [{"id": "mock-vol-4"}, {"id": "mock-vol-5"}]},
+    {"id": "mock-vg-3", "name": "mock-group.snapshot-set", "description": "Snapshot set (not mappable)",
+     "type": "Snapshot", "volumes": [{"id": "mock-vol-3"}]},
 ]
-_VG_ATTACHED: set[tuple[str, str]] = set()  # (volume_group_id, host_id) mapped through attach/detach
+_ATTACHED: set[tuple[str, str]] = set()  # (host_id, volume_id) mapped through /host/{id}/attach
 
 
 class MockPowerStoreClient(PowerStoreClient):
@@ -273,6 +275,26 @@ class MockPowerStoreClient(PowerStoreClient):
                 "appliance_id": "mock-appliance-a",
                 "nsid": 3,
             },
+            {
+                "id": "mock-vol-4",
+                "name": "mock-esx-ds01",
+                "type": "Primary",
+                "state": "Ready",
+                "size": 2 * TB,
+                "wwn": "6000000000000004",
+                "appliance_id": "mock-appliance-a",
+                "nsid": 4,
+            },
+            {
+                "id": "mock-vol-5",
+                "name": "mock-esx-ds02",
+                "type": "Primary",
+                "state": "Ready",
+                "size": 2 * TB,
+                "wwn": "6000000000000005",
+                "appliance_id": "mock-appliance-a",
+                "nsid": 5,
+            },
         ]
         if primary_only:
             return [volume for volume in volumes if volume.get("type") == "Primary"]
@@ -356,11 +378,9 @@ class MockPowerStoreClient(PowerStoreClient):
 
     async def get_host_volume_mappings(self) -> list[dict[str, Any]]:
         attached = [
-            {"id": f"mock-map-{vg_id}-{host_id}-{vol['id']}", "host_id": host_id, "host_group_id": None,
-             "volume_id": vol["id"], "logical_unit_number": 10}
-            for vg_id, host_id in sorted(_VG_ATTACHED)
-            for vg in _MOCK_VOLUME_GROUPS if vg["id"] == vg_id
-            for vol in vg["volumes"]
+            {"id": f"mock-map-{host_id}-{volume_id}", "host_id": host_id, "host_group_id": None,
+             "volume_id": volume_id, "logical_unit_number": 10 + n}
+            for n, (host_id, volume_id) in enumerate(sorted(_ATTACHED))
         ]
         return attached + [
             {
@@ -653,21 +673,21 @@ class MockPowerStoreClient(PowerStoreClient):
         return [{k: v for k, v in vg.items() if k != "volumes"} for vg in _MOCK_VOLUME_GROUPS]
 
     async def get_volume_groups_with_volumes(self) -> list[dict[str, Any]]:
-        return [dict(vg) for vg in _MOCK_VOLUME_GROUPS]
+        return [dict(vg, volume_count=len(vg["volumes"])) for vg in _MOCK_VOLUME_GROUPS]
 
-    async def attach_volume_group(self, volume_group_id: str, host_id: str) -> None:
-        if not any(vg["id"] == volume_group_id for vg in _MOCK_VOLUME_GROUPS):
-            raise PowerStoreError("Volume group not found")
-        if (volume_group_id, host_id) in _VG_ATTACHED:
-            raise PowerStoreError("The volume group is already attached to this host")
+    async def attach_host_volume(self, host_id: str, volume_id: str) -> None:
+        if (host_id, volume_id) in _ATTACHED or any(
+            m["host_id"] == host_id and m["volume_id"] == volume_id for m in await self.get_host_volume_mappings()
+        ):
+            raise PowerStoreError("The volume is already mapped to this host")
         await asyncio.sleep(0.15)  # make concurrency visible in mock mode
-        _VG_ATTACHED.add((volume_group_id, host_id))
+        _ATTACHED.add((host_id, volume_id))
 
-    async def detach_volume_group(self, volume_group_id: str, host_id: str) -> None:
-        if (volume_group_id, host_id) not in _VG_ATTACHED:
-            raise PowerStoreError("The volume group is not attached to this host")
+    async def detach_host_volume(self, host_id: str, volume_id: str) -> None:
+        if (host_id, volume_id) not in _ATTACHED:
+            raise PowerStoreError("The volume is not mapped to this host")
         await asyncio.sleep(0.15)
-        _VG_ATTACHED.discard((volume_group_id, host_id))
+        _ATTACHED.discard((host_id, volume_id))
 
     async def enable_fast_metrics(self, volume_id: str) -> None:
         return None
